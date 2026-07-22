@@ -1,0 +1,9 @@
+# Large sample recordings (fetch with scripts/download_data.jl)
+/data/*.int16
+/data/*.dat
+# Test artifacts
+/test/*.int16
+# Recordings/exports from Tachikoma (Ctrl+R)
+*.tach
+*.gif
+*.svg
