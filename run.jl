@@ -22,7 +22,7 @@ function parse_args(args)
     opts = Dict{String,Any}(
         "path" => joinpath(@__DIR__, "data", "LimeSDR_Bands-L1.int16"),
         "sdr" => false, "realtime" => true, "fps" => 12, "fs" => 10.0e6Hz,
-        "no_acq" => false, "no_rx" => false, "if_khz" => nothing,
+        "no_acq" => false, "no_rx" => false, "if_khz" => nothing, "gain" => 60.0,
     )
     i = 1
     while i <= length(args)
@@ -41,17 +41,19 @@ function parse_args(args)
             opts["path"] = args[i+1]; i += 1
         elseif a == "--fps" && i < length(args)
             opts["fps"] = parse(Int, args[i+1]); i += 1
+        elseif a == "--gain" && i < length(args)
+            opts["gain"] = parse(Float64, args[i+1]); i += 1
         end
         i += 1
     end
     opts
 end
 
-function live_hub(fs, num_samples)
+function live_hub(fs, num_samples, gain_db)
     @info "Opening SoapySDR device…"
     @eval Main using SoapySDR
     dev = first(Main.SoapySDR.Devices())
-    config = SDRChannelConfig(; sample_rate = fs, frequency = 1.57542e9Hz, gain = 40dB)
+    config = SDRChannelConfig(; sample_rate = fs, frequency = 1.57542e9Hz, gain = gain_db * dB)
     # ComplexF32 stream (general CPU backend; max_meas unused). Streams until closed.
     data_channel, _warn = stream_data(dev, config, typemax(Int); chunk_size = num_samples)
     cfg = GNSSPresentation.StreamConfig(; fs, num_samples, realtime = true)
@@ -68,7 +70,7 @@ function main()
     if opts["sdr"]
         # A live SDR is tuned to L1 → baseband (0 IF) unless overridden.
         interm_freq = (if_set ? opts["if_khz"] : 0.0) * 1e3 * Hz
-        hub = live_hub(fs, num_samples)
+        hub = live_hub(fs, num_samples, opts["gain"])
         run_presentation(; fs, interm_freq, num_samples, hub, fps = opts["fps"],
             skip_acquisition = opts["no_acq"], skip_receiver = opts["no_rx"])
     else

@@ -105,8 +105,26 @@ next launch; unchanged code always starts from the cache.
 
 `run.jl --sdr` opens the first SoapySDR device at the GPS L1 frequency (1.57542 GHz,
 10 MSPS) via SignalChannels.jl. You need SoapySDR plus a driver JLL for your hardware
-(e.g. `SoapyLMS7_jll` for a LimeSDR). Adjust the frequency/gain in `run.jl`'s
-`live_hub` for your front end.
+(e.g. `SoapyLMS7_jll` for a LimeSDR). `--gain <dB>` sets the RX gain (default 60, which
+reliably acquires GPS on an active antenna; drop it if you see clipping). The RX
+frequency lives in `run.jl`'s `live_hub`.
+
+**LiteX-M2SDR** (tested on an NVIDIA Jetson Orin): its SoapySDR plugin isn't a
+registered JLL you can just `Pkg.add`, so build it from
+[`enjoy-digital/litex_m2sdr`](https://github.com/enjoy-digital/litex_m2sdr)
+(`software/build.py` — installs the kernel driver, `libm2sdr`, and the SoapySDR module),
+then point Julia's SoapySDR at the system plugin:
+
+```bash
+export SOAPY_SDR_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/SoapySDR/modules0.8
+julia --project -t auto,1 run.jl --sdr --gain 60
+```
+
+Two gotchas found on the Orin: (1) on IOMMU hosts the kernel driver needs the
+zero-copy-mmap fix from [PR #150](https://github.com/enjoy-digital/litex_m2sdr/pull/150)
+(without it SoapySDR RX streams mostly-zero buffers — see issue #149); and (2) the host
+software (kernel + user + SoapySDR module) must be built from the **same commit as the
+flashed FPGA gateware**, or CSR reads fail.
 
 ## How it streams (architecture)
 
