@@ -120,11 +120,14 @@ export SOAPY_SDR_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/SoapySDR/modules0.8
 julia --project -t auto,1 run.jl --sdr --gain 60
 ```
 
-Two gotchas found on the Orin: (1) on IOMMU hosts the kernel driver needs the
-zero-copy-mmap fix from [PR #150](https://github.com/enjoy-digital/litex_m2sdr/pull/150)
-(without it SoapySDR RX streams mostly-zero buffers — see issue #149); and (2) the host
-software (kernel + user + SoapySDR module) must be built from the **same commit as the
-flashed FPGA gateware**, or CSR reads fail.
+Gotcha found on the Orin: on IOMMU hosts the kernel driver needs the zero-copy-mmap fix
+from [PR #150](https://github.com/enjoy-digital/litex_m2sdr/pull/150) (without it SoapySDR
+RX streams mostly-zero buffers — see issue #149). Host software from a *newer* commit than
+the flashed gateware is fine as long as the core CSR map (identifier / AD9361 / DMA /
+crossbar) hasn't moved — it's been stable across recent releases, and verified: current
+`main` software drives the 2026-05-15 gateware and acquires satellites. If CSR reads come
+back all-`0xff` after repeated `rmmod`/`insmod`, the PCIe link is wedged — **reboot** to
+reset it (the installed module auto-loads on boot).
 
 ## How it streams (architecture)
 
