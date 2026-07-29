@@ -32,21 +32,24 @@ function render_pvt(m::PresentationModel, f::Frame, area::Rect, s)
         set_string!(buf, cc.x + 2, cc.y + 1, "Searching for satellites…",
             tstyle(:text_dim); max_x = right(cc))
     else
-        prns = collect(keys(gui.sat_data))
-        vals = collect(values(gui.sat_data))
-        entries = BarEntry[]
-        for (prn, sat) in zip(prns, vals)
-            db = _cn0_db(sat.cn0)
-            style = sat.is_healthy ? tstyle(:success) : tstyle(:error)
-            push!(entries, BarEntry("PRN$(lpad(prn,2))", isnan(db) ? 0.0 : round(db; digits = 1), style))
-        end
-        render(BarChart(entries; max_val = 55.0, label_width = 6), cc, buf)
+        # UnicodePlots barplot, sorted by PRN, coloured green (healthy) / red (unhealthy),
+        # painted into the panel as ANSI spans — same look as the GNSSReceiver GUI.
+        prns = sort(collect(keys(gui.sat_data)))
+        labels = ["PRN $(k)" for k in prns]
+        cn0s = [(d = _cn0_db(gui.sat_data[k].cn0); isnan(d) ? 0.0 : round(d; digits = 1)) for k in prns]
+        colors = [gui.sat_data[k].is_healthy ? :green : :red for k in prns]
+        labelw = maximum(length, labels)
+        # barplot's own chrome (label col + " ┤" + trailing " NN.N") plus panel padding.
+        barwidth = clamp(cc.width - labelw - 9, 5, 60)
+        plot = UP.barplot(labels, cn0s; color = colors, border = :none,
+            width = barwidth, maximum = 55)
+        _paint_plot!(buf, cc, string(plot; color = true))
     end
 
     # ── Sky plot (direction of arrival) ──
     sc = render(Block(; title = "Direction of arrival", border_style = tstyle(:border),
             title_style = tstyle(:accent, bold = true)), skyarea, buf)
-    _render_skyplot(buf, sc, gui, m)
+    _render_skyplot(buf, sc, gui)
 
     # ── Position ──
     pc = render(Block(; title = "Position / time", border_style = tstyle(:border),
@@ -100,61 +103,74 @@ function _render_map(m::PresentationModel, buf, area::Rect, s)
     return
 end
 
-# Terminal cells are about twice as tall as wide, so a "circle" drawn with equal
-# horizontal/vertical extent looks stretched vertically. Compress the vertical axis by
-# this factor to render a round sky plot.
-const CELL_ASPECT = 0.5   # cell width / height
-
-function _render_skyplot(buf, area::Rect, gui, m)
-    w, h = area.width, area.height
-    (w < 6 || h < 4) && return
-    cx = area.x + w ÷ 2
-    cy = area.y + h ÷ 2
-    Rx = min(w ÷ 2 - 1, floor(Int, (h ÷ 2 - 1) / CELL_ASPECT))   # horizontal radius (cells)
-    Rx < 2 && return
-    Ry = Rx * CELL_ASPECT                                        # vertical radius (cells)
-    gridstyle = tstyle(:border, dim = true)
-
-    plot!(px, py, ch, st) = set_char!(buf, clamp(px, area.x, right(area)),
-        clamp(py, area.y, bottom(area)), ch, st)
-
-    # elevation rings 0°/30°/60° as aspect-corrected ellipses
-    for e in (0, 30, 60)
-        f = 1 - e / 90
-        rx, ry = f * Rx, f * Ry
-        n = max(24, round(Int, 2π * rx))
-        for k in 0:n-1
-            θ = 2π * k / n
-            plot!(round(Int, cx + rx * cos(θ)), round(Int, cy + ry * sin(θ)), '·', gridstyle)
+# Paint a UnicodePlots colour string (`string(plot; color=true)`) or any ANSI text into
+# `area`: split into lines, parse each line's ANSI into spans, lay them out left-to-right,
+# clipping at the panel edges. `set_string!`'s return value is the only reliable column
+# advance (it strips ANSI/control chars and segments graphemes), so we never recompute width.
+function _paint_plot!(buf, area::Rect, str::AbstractString)
+    for (i, line) in enumerate(split(str, '\n'))
+        y = area.y + i - 1
+        y > bottom(area) && break
+        x = area.x
+        for sp in parse_ansi(String(line))
+            x > right(area) && break
+            x = set_string!(buf, x, y, sp.content, sp.style; max_x = right(area))
         end
     end
-    # cardinal spokes
-    for dx in -Rx:Rx
-        plot!(cx + dx, cy, '·', gridstyle)
-    end
-    for dy in -round(Int, Ry):round(Int, Ry)
-        plot!(cx, cy + dy, '·', gridstyle)
-    end
-    plot!(cx, cy, '+', gridstyle)
-    plot!(cx, cy - round(Int, Ry), 'N', tstyle(:text_dim))
+    return
+end
 
-    gui === nothing && return
+# Direction-of-arrival sky plot via UnicodePlots `polarplot` (round braille circle with
+# elevation rings and azimuth axis), painted as ANSI spans — same look as GNSSReceiver.
+function _render_skyplot(buf, area::Rect, gui)
+    (area.width < 12 || area.height < 6) && return
+    if gui === nothing || gui.pvt === nothing || gui.pvt.time === nothing
+        nsat = gui === nothing ? 0 : length(gui.sat_data)
+        set_string!(buf, area.x + 1, area.y,
+            nsat < 4 ? "Not enough satellites for a fix." : "Decoding satellites…",
+            tstyle(:text_dim); max_x = right(area))
+        return
+    end
     pvt = gui.pvt
-    (pvt === nothing || pvt.time === nothing) && return
+    # One point per physical satellite (dedupe by PRN), az/el from the fix geometry.
+    seen = Set{Int}()
+    azs, zenith, prns = Float64[], Float64[], Int[]
     try
         for (key, sat) in pairs(pvt.sats)
-            enu = get_sat_enu(pvt.position, sat.position)
-            az, el = enu.θ, enu.ϕ                            # radians (az from N, el up)
-            f = clamp(1 - el / (π / 2), 0.0, 1.0)            # 0 at zenith, 1 at horizon
-            px = clamp(round(Int, cx + f * Rx * sin(az)), area.x, right(area))
-            py = clamp(round(Int, cy - f * Ry * cos(az)), area.y, bottom(area))
             prn = key isa Tuple ? last(key) : key
-            set_char!(buf, px, py, '●', tstyle(:success, bold = true))
-            set_string!(buf, min(px + 1, right(area)), py, string(prn),
-                tstyle(:text_bright); max_x = right(area))
+            prn in seen && continue
+            push!(seen, prn)
+            enu = get_sat_enu(pvt.position, sat.position)
+            push!(azs, enu.θ)                                # azimuth, radians from North
+            push!(zenith, 90 - enu.ϕ * 180 / π)             # zenith distance = 90° − elevation
+            push!(prns, prn)
         end
     catch
     end
+    isempty(azs) && return
+    # Size the canvas ~2:1 (cols:rows) so braille cells render a round circle; leave margin
+    # for the axis labels UnicodePlots draws around it.
+    wcanvas = clamp(min(area.width - 13, 2 * (area.height - 4)), 8, 60)
+    hcanvas = max(4, wcanvas ÷ 2)
+    grid = UP.BORDER_COLOR[]
+    doa = UP.polarplot(azs, zenith; rlim = (0, 90), scatter = true, marker = :circle,
+        color = :green, border = :none, num_rad_lab = 0, width = wcanvas, height = hcanvas)
+    # PRN label on each point (polarplot places θ CCW from +x at radius r → (r·cosθ, r·sinθ)).
+    for (az, r, prn) in zip(azs, zenith, prns)
+        UP.annotate!(doa, r * cos(az), r * sin(az), string(prn); color = :green)
+    end
+    # Elevation rings labelled along the π/4 diagonal as bare numbers (° is for azimuth).
+    for el in (0, 30, 60)
+        r = 90 - el
+        UP.annotate!(doa, r * cos(π / 4), r * sin(π / 4), string(el); color = grid)
+    end
+    # GNSS azimuth convention: 0°=North top, clockwise (90°=E right, 180°=S bottom, 270°=W left).
+    mid = ceil(Int, UP.nrows(doa.graphics) / 2)
+    UP.label!(doa, :t, "0°"; color = grid)
+    UP.label!(doa, :r, mid, "90°"; color = grid)
+    UP.label!(doa, :b, "180°"; color = grid)
+    UP.label!(doa, :l, mid, "270°"; color = grid)
+    _paint_plot!(buf, area, string(doa; color = true))
     return
 end
 

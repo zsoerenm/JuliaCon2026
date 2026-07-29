@@ -29,6 +29,7 @@ using Dictionaries: dictionary
 using FFTW: ESTIMATE
 using PrecompileTools: @compile_workload
 import DSP
+import UnicodePlots as UP   # qualified: barplot/polarplot names would clash with Tachikoma
 using Unitful: Hz, MHz, dBHz, s, ustrip, @u_str
 using StaticArrays: SVector
 
@@ -507,6 +508,21 @@ function _warmup(system, fs; receiver::Bool = true)
         num_ants = NumAnts(1), correlator = tri)
     ts = TrackState(dictionary((1 => sat,)))
     track!(vcat(code, code), ts, fs; downconvert_and_correlator = CPUThreadedDownconvertAndCorrelator())
+
+    # Warm the PVT slide's UnicodePlots CN0 barplot + DOA polarplot (heavy first-call
+    # compilation) so the slide doesn't stutter the first time it's shown.
+    try
+        bp = string(UP.barplot(["PRN 1", "PRN 2"], [45.0, 48.0]; color = [:green, :red],
+            border = :none, width = 20, maximum = 55); color = true)
+        foreach(l -> parse_ansi(String(l)), split(bp, '\n'))
+        dp = UP.polarplot([0.5, 2.0], [30.0, 60.0]; rlim = (0, 90), scatter = true,
+            marker = :circle, color = :green, border = :none, num_rad_lab = 0,
+            width = 20, height = 10)
+        UP.annotate!(dp, 30cos(0.5), 30sin(0.5), "1"; color = :green)
+        UP.label!(dp, :t, "0°"; color = UP.BORDER_COLOR[])
+        foreach(l -> parse_ansi(String(l)), split(string(dp; color = true), '\n'))
+    catch
+    end
 
     # Warm the full receiver pipeline too. A short synthetic stream is enough to trace
     # every method. This is the heavy part; skip it for the light runtime insurance pass
