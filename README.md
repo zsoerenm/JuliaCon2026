@@ -6,20 +6,30 @@ samples, built on [Tachikoma.jl](https://github.com/kahliburke/Tachikoma.jl). Ea
 slide visualizes one stage of the receiver pipeline, live, from the same warm stream.
 
 ```
-samples → spectrum → acquisition → tracking → PVT
+samples → spectrum → acquisition → tracking → decoding → PVT
 ```
+
+The narrative the slides are built to tell — the three clocks, why each stage exists,
+and the timing plan — is written down in **[STORY.md](STORY.md)**.
 
 ## Slides
 
 | # | Slide | What it shows (live) |
 |---|-------|----------------------|
-| 0 | **Title** | Pipeline diagram + a "● streaming" heartbeat (the SDR is already warm) |
+| 0 | **Title** | The three clocks (50 bit/s · 10 MSPS · 12 min) + a "● streaming" heartbeat |
 | 1 | **Spectrum** | Live periodogram — a flat noise floor; the GPS signals are *below* it |
-| 2 | **Codes & correlation** | A real PRN code (`gen_code`) as a ±1 square wave, and why correlation yields a **triangle** — the idea behind acquisition & tracking |
+| 2 | **The signal I have to chase** | Nav bits × PRN chips at their real (very different) time scales, a replica **sliding** against the received code, and the true size of the code-phase × Doppler search |
 | 3 | **Acquisition** | 32-PRN search bar; pick a detected PRN → its **3D correlation surface** |
 | 4 | **Tracking** | The **correlation triangle** from a real many-tap correlator; Early/Prompt/Late colored |
-| 5 | **PVT** | CN0 bars, a **direction-of-arrival sky plot**, the computed position, and an **OpenStreetMap** view of it (UnicodeMaps.jl) |
-| 6 | **Ecosystem** | The six JuliaGNSS packages + closing |
+| 5 | **Decoding** | **Starts the receiver.** Subframe progress at 50 bit/s, the time-of-week, and ephemeris values popping in one 30-bit word at a time; "N of M ready — 4 needed for a fix" |
+| 6 | **PVT** | CN0 bars, a **direction-of-arrival sky plot**, the computed position, and an **OpenStreetMap** view of it (UnicodeMaps.jl) |
+| 7 | **Why Julia** | The composability argument, made from this repository's own code |
+| 8 | **Ecosystem** | The JuliaGNSS packages, next steps + closing |
+
+A pipeline strip rides along under the title on every slide. The current stage is
+highlighted, and a stage turns **green only once it has actually succeeded on this run**
+(satellites detected, ephemeris decoded, fix computed) — so it doubles as a progress bar
+for the talk and as evidence that nothing on screen is canned.
 
 Navigate with **← / →** (or PgUp/PgDn). On the acquisition slide, **↑ / ↓** select the
 previous/next detected PRN (shown on the acquisition and tracking slides), and **z**
@@ -81,6 +91,14 @@ default (or `--full`) for the PVT slide; the earlier slides work with `--short`.
 > the receiver's nav decode, so only the stateless front slides loop; the receiver plays
 > through once. A longer recording or a live SDR gives continuously updating PVT.
 
+> **The receiver starts late, on purpose.** It is *not* running during the intro: it
+> starts the first time you reach the **Decoding** slide, on its own reader from the start
+> of the recording. The audience then watches the ephemeris fill in from zero and the fix
+> converge live — which is what makes the demo visibly not canned, and what paces it (the
+> decode genuinely takes ~30 s, roughly the length of that slide). Revisiting the slide
+> never starts a second receiver. If a rehearsal or the room's timing goes badly, pass
+> `--eager-receiver` to warm it from startup instead.
+
 ## Run
 
 ```bash
@@ -91,8 +109,9 @@ julia --project -t auto,1 run.jl --sdr           # live from a SoapySDR device
 ```
 
 Diagnostic switches (isolate CPU/behavior): `--no-acq` skips the acquisition slide +
-task, `--no-receiver` skips the continuous receiver (no PVT). The app runs its GUI loop
-on the interactive thread when you start Julia with `,1`.
+task, `--no-receiver` skips the receiver entirely (no decoding, no PVT),
+`--eager-receiver` starts the receiver at startup rather than on the decoding slide. The
+app runs its GUI loop on the interactive thread when you start Julia with `,1`.
 
 **Startup is fast** (~3 s to the first frame): the expensive first-call compilation of
 the acquisition, tracking, and receiver code paths is baked into the package's
@@ -145,8 +164,18 @@ Key modules under `src/`:
 - `source.jl` — persistent source + drop-on-full fan-out hub
 - `triangle_correlator.jl` — a many-tap `AbstractEarlyPromptLateCorrelator` (integer-sample taps)
 - `acq_surface.jl` — rasterizes the acquisition power surface into a sixel `PixelImage`
+- `nav_snapshot.jl` — the custom `extract` payload that carries live decoder state
 - `GNSSPresentation.jl` — the Tachikoma `Model`, background tasks, slide dispatch, entry point
-- `slide_*.jl` — the seven slide renderers
+- `slide_*.jl` — the nine slide renderers
+
+**One reader per channel.** `SignalChannels` allows a single consumer per channel, and
+nothing here violates that. The fan-out task in `source.jl` is the *only* consumer of the
+source; it `put!`s into four branch channels, each drained by exactly one task. Decoding
+and PVT are **not** separate consumers — there is one receiver, and one `extract` closure
+lifts the decoder state *and* the PVT solution out of the same `ReceiverState` into a
+single `NavSnapshot`, which both slides read. On file replay the receiver does not use its
+hub branch at all: it gets its own private channel fed by a second, independent file
+reader, so the two readers share only the path on disk.
 
 ## Tests
 
@@ -157,4 +186,6 @@ julia --project -t auto test/runtests.jl
 ```
 
 Covers acquisition detection, the tracked correlation triangle, surface rasterization,
-the flat periodogram, the full persistent-stream pipeline, and rendering every slide.
+the flat periodogram, the full persistent-stream pipeline, the lazy receiver start (both
+that it does *not* run before the decoding slide and that revisiting the slide never
+starts a second one), the live nav-decode payload, and rendering every slide.

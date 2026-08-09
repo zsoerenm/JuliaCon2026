@@ -6,6 +6,7 @@ const ECOSYSTEM = [
     (GNSSSignals, "GNSSSignals.jl", "PRN codes & signal definitions (GPS, Galileo, …)"),
     (Acquisition, "Acquisition.jl", "FM-DBZP acquisition — find satellites in noise"),
     (Tracking, "Tracking.jl", "PLL/DLL carrier & code tracking loops"),
+    (GNSSDecoder, "GNSSDecoder.jl", "navigation message & ephemeris decoding"),
     (PositionVelocityTime, "PositionVelocityTime.jl", "PVT solution from pseudoranges"),
     (SignalChannels, "SignalChannels.jl", "SDR streaming (SoapySDR) & signal plumbing"),
     (GNSSReceiver, "GNSSReceiver.jl", "the full receiver: acquire → track → decode → PVT"),
@@ -24,7 +25,12 @@ function render_outro(m::PresentationModel, f::Frame, area::Rect, s)
         area, buf)
     x = content.x + 2
     y = content.y + 1
-    set_string!(buf, x, y, "Six composable, pure-Julia packages — stable and production ready:",
+    # Close the frame the title slide opened.
+    set_string!(buf, x, y, "We started with Int16 samples and a sample rate.",
+        tstyle(:text_dim); max_x = right(content)); y += 1
+    set_string!(buf, x, y, "We ended with a position on a map — and the time to within nanoseconds.",
+        tstyle(:secondary, bold = true); max_x = right(content)); y += 2
+    set_string!(buf, x, y, "Composable, pure-Julia packages — stable and production ready:",
         tstyle(:text); max_x = right(content)); y += 2
     for (mod, name, desc) in ECOSYSTEM
         set_string!(buf, x, y, "• " * name, tstyle(:primary, bold = true); max_x = right(content))
@@ -33,8 +39,10 @@ function render_outro(m::PresentationModel, f::Frame, area::Rect, s)
         y += 1
     end
     y += 1
-    set_string!(buf, x, y, "Real-time positioning in Julia — from SDR samples to your location.",
-        tstyle(:secondary, bold = true); max_x = right(content)); y += 2
+    set_string!(buf, x, y, "Next: Galileo E1/E5a alongside GPS, multi-antenna arrays, and more live hardware.",
+        tstyle(:text); max_x = right(content)); y += 1
+    set_string!(buf, x, y, "Issues, PRs and recordings all welcome — it is a small ecosystem and it is open.",
+        tstyle(:text_dim); max_x = right(content)); y += 2
     set_string!(buf, x, y, "github.com/JuliaGNSS      Thank you!  ·  Questions?",
         tstyle(:success, bold = true); max_x = right(content))
     return

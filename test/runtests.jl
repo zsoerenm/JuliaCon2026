@@ -115,18 +115,54 @@ end
     end
 
     # Heavy DSP only runs on its slide → drive the slide to exercise each branch.
-    @lock m.lk (m.slide = GP.SLIDE_SPECTRUM)
+    GP._set_slide!(m, GP.SLIDE_SPECTRUM)
     @test waitfor(() -> (@lock m.lk m.periodogram) !== nothing)
 
-    @lock m.lk (m.slide = GP.SLIDE_ACQ)
+    GP._set_slide!(m, GP.SLIDE_ACQ)
     @test waitfor(() -> (@lock m.lk (m.surface !== nothing && m.selected_prn !== nothing)))
     @test !isempty(m.detected)
+    # Slide 2 quotes the real plan's search size, published by the background tasks.
+    sp = @lock m.lk m.acq_space
+    @test sp !== nothing
+    @test sp.code_phases == SPC && sp.doppler_bins > 1 && sp.prns == 32
+    @test sp.hypotheses ≈ sp.code_phases * sp.doppler_bins * sp.prns
 
-    @lock m.lk (m.slide = GP.SLIDE_TRACK)
+    GP._set_slide!(m, GP.SLIDE_TRACK)
     @test waitfor(() -> (@lock m.lk m.triangle) !== nothing)
 
-    # Receiver is NOT gated — it warms regardless of slide (so PVT is immediate).
-    @test waitfor(() -> (@lock m.lk m.gui) !== nothing; n = 200)
+    # The receiver is started lazily, by entering the decoding slide — not before.
+    @test !(:receiver in (@lock m.lk copy(m.started)))
+    @test (@lock m.lk m.gui) === nothing
+    GP._set_slide!(m, GP.SLIDE_DECODE)
+    @test :receiver in (@lock m.lk copy(m.started))
+    ntasks = @lock m.lk length(m.tasks)
+    # Revisiting the slide must not start a second receiver (and a second file reader).
+    GP._set_slide!(m, GP.SLIDE_TRACK)
+    GP._set_slide!(m, GP.SLIDE_DECODE)
+    @test (@lock m.lk length(m.tasks)) == ntasks
+
+    @test waitfor(() -> (@lock m.lk m.gui) !== nothing; n = 300)
+    # The decoding slide's payload carries live decoder state, not just CN0/PVT.
+    gui = @lock m.lk m.gui
+    @test gui isa GP.NavSnapshot
+    if !isempty(gui.sat_data)
+        sd = first(gui.sat_data)
+        @test hasproperty(sd, :raw) && hasproperty(sd, :complete)
+        @test sd.bits_in_subframe >= -1
+    end
+    m.quit = true
+end
+
+@testset "eager receiver start (rehearsal fallback)" begin
+    m = GP.PresentationModel(; fs = FS, eager_rx = true)
+    m.hub = GP.start_stream(GP.StreamConfig(; path = DATA, fs = FS, num_samples = 10 * SPC,
+        realtime = true, loop = true))
+    GP.start_processing!(m)
+    @test :receiver in (@lock m.lk copy(m.started))
+    # …and entering the decoding slide later must not start a second one.
+    n = @lock m.lk length(m.tasks)
+    GP._set_slide!(m, GP.SLIDE_DECODE)
+    @test (@lock m.lk length(m.tasks)) == n
     m.quit = true
 end
 

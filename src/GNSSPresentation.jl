@@ -14,18 +14,20 @@ using Tachikoma
 @tachikoma_app
 
 using GNSSReceiver: receive, get_gui_data_channel
+using GNSSDecoder: is_sat_healthy, is_decoding_completed_for_positioning
 using Acquisition: plan_acquire, acquire!, AcquisitionResults, is_detected
 using Tracking: NumAnts, TrackState, TrackedSat, track!,
     CPUThreadedDownconvertAndCorrelator, get_sat_states,
     get_last_fully_integrated_correlator, get_accumulators, get_prompt,
-    get_early, get_late, dll_disc, get_code_phase
+    get_early, get_late, dll_disc, get_code_phase, estimate_cn0
 using GNSSSignals: GPSL1CA, get_code_frequency, get_code_length, gen_code, AbstractGNSSSignal
 # module bindings so the outro slide can report each package's actual version at runtime
-import GNSSSignals, Acquisition, Tracking, PositionVelocityTime, SignalChannels, GNSSReceiver
+import GNSSSignals, Acquisition, Tracking, PositionVelocityTime, SignalChannels, GNSSReceiver,
+    GNSSDecoder
 using SignalChannels: SignalChannel, consume_channel
-using PositionVelocityTime: get_LLA, get_sat_enu
+using PositionVelocityTime: get_LLA, get_sat_enu, PVTSolution
 using UnicodeMaps: worldmap
-using Dictionaries: dictionary
+using Dictionaries: dictionary, Dictionary
 using FFTW: ESTIMATE
 using PrecompileTools: @compile_workload
 import DSP
@@ -37,8 +39,9 @@ include("colormap.jl")
 include("triangle_correlator.jl")
 include("source.jl")
 include("acq_surface.jl")
+include("nav_snapshot.jl")
 
-const NUM_SLIDES = 7            # see slide index constants below
+const NUM_SLIDES = 9            # see slide index constants below
 const CN0_DETECT_THRESHOLD = 38.0   # dBHz; a PRN counts as "detected" above this
 
 # ── Model ────────────────────────────────────────────────────────────────────
@@ -56,6 +59,8 @@ mutable struct PresentationModel <: Model
     interm_freq::Any
     skip_acq::Bool                   # diagnostic: drop the acquisition slide + task
     skip_rx::Bool                    # diagnostic: don't run the receiver (no PVT)
+    eager_rx::Bool                   # start the receiver at startup instead of on SLIDE_DECODE
+    started::Set{Symbol}             # one-shot registry for lazily started work (under lk)
     # shared results (published wholesale by background tasks; read under lk)
     chunk_count::Int
     periodogram::Any                 # PeriodogramData | nothing
@@ -79,15 +84,19 @@ mutable struct PresentationModel <: Model
     pg_ymax::Float64                 # periodogram y-axis max [dB] (windowed)
     pg_win::Vector{Tuple{Float64,Float64}}  # sliding window of per-frame (min,max)
     acq_zoom::Bool                   # acquisition surface: true=±chips around peak, false=full code
+    eph_seen::Dict{Tuple{Int,Symbol},Int}   # (prn, field) → tick it first appeared (flash timing)
+    last_tow::Dict{Int,Int}          # prn → most recent decoded TOW (the decoder's flickers out)
+    acq_space::Any                   # NamedTuple of real search-space sizes | nothing
 end
 
 function PresentationModel(; system = GPSL1CA(), fs = 10.0e6Hz, interm_freq = 0.0Hz,
-    skip_acq = false, skip_rx = false)
+    skip_acq = false, skip_rx = false, eager_rx = false)
     PresentationModel(false, 0, 0, ReentrantLock(), nothing, Task[],
-        system, fs, interm_freq, skip_acq, skip_rx,
+        system, fs, interm_freq, skip_acq, skip_rx, eager_rx, Set{Symbol}(),
         0, nothing, AcquisitionResults[], Int[], 1, nothing, nothing, nothing,
         false, nothing, nothing, nothing, nothing, nothing, nothing, 13, 0.0, 0.0,
-        Inf, -Inf, Tuple{Float64,Float64}[], false)   # acq_zoom: default to full code-phase view
+        Inf, -Inf, Tuple{Float64,Float64}[], false,   # acq_zoom: default to full code-phase view
+        Dict{Tuple{Int,Symbol},Int}(), Dict{Int,Int}(), nothing)
 end
 
 should_quit(m::PresentationModel) = m.quit
@@ -105,22 +114,91 @@ const SLIDE_SPECTRUM = 1
 const SLIDE_EXPLAIN = 2
 const SLIDE_ACQ = 3
 const SLIDE_TRACK = 4
-const SLIDE_PVT = 5
-const SLIDE_OUTRO = 6
+const SLIDE_DECODE = 5
+const SLIDE_PVT = 6
+const SLIDE_JULIA = 7
+const SLIDE_OUTRO = 8
 const PG_WINDOW = 24              # periodogram y-axis sliding window (frames, ~6 s at 4 Hz)
 
 _slide(m::PresentationModel) = @lock m.lk m.slide
 
-"Attach the four branch consumers to the running hub."
+"Attach the branch consumers to the running hub."
 function start_processing!(m::PresentationModel)
     hub = m.hub
     hub === nothing && return
     push!(m.tasks, _spawn_periodogram(m, hub))
-    m.skip_rx || push!(m.tasks, _spawn_receiver(m, hub))
+    # The receiver is normally started on demand, when the decoding slide is first shown,
+    # so the audience watches the ephemeris decode and the fix converge from zero rather
+    # than meeting a fix that was quietly reached during the intro. `--eager-receiver`
+    # restores the old warm-from-startup behaviour as a timing fallback.
+    m.eager_rx && _start_receiver_once!(m; startup_delay = 2.0)
     m.skip_acq || push!(m.tasks, _spawn_acquisition(m, hub))
     push!(m.tasks, _spawn_tracking(m, hub))
     push!(m.tasks, _spawn_map(m))
     return m
+end
+
+"""
+    _start_once!(f, m, key) -> Bool
+
+Run `f()` the first time `key` is claimed and return `true`; later calls are no-ops
+returning `false`. Takes `m.lk` (reentrant, so it is safe to call from `update!`, which
+already holds it). Slides can be revisited, so every on-demand start goes through here.
+"""
+function _start_once!(f, m::PresentationModel, key::Symbol)
+    @lock m.lk begin
+        key in m.started && return false
+        push!(m.started, key)
+        f()
+        return true
+    end
+end
+
+"Start the receiver exactly once (no-op under `--no-receiver`)."
+function _start_receiver_once!(m::PresentationModel; startup_delay = 0.0)
+    m.skip_rx && return false
+    _start_once!(m, :receiver) do
+        hub = m.hub
+        hub === nothing || push!(m.tasks, _spawn_receiver(m, hub; startup_delay))
+    end
+end
+
+"""
+    _publish_acq_space!(m, plan)
+
+Publish the real size of the acquisition search so slide 2 can quote it instead of
+hardcoding textbook figures: the number of code-phase offsets (one per sample of a code
+period), the Doppler grid the plan actually searches, and the PRN count. `operations` is
+what a *naive* search would cost — every hypothesis is a full code-period correlation —
+which is the number that motivates the FFT-based search on the next slide.
+
+Called by whichever background task builds a plan first; first writer wins.
+"""
+function _publish_acq_space!(m::PresentationModel, plan)
+    @lock m.lk begin
+        m.acq_space === nothing || return
+        dopplers = plan.doppler_freqs
+        code_phases = plan.samples_per_code
+        bins = length(dopplers)
+        prns = length(plan.avail_prns)
+        hypotheses = float(code_phases) * bins * prns
+        m.acq_space = (
+            code_phases = code_phases,
+            doppler_bins = bins,
+            doppler_span_hz = abs(Float64(ustrip(Hz, last(dopplers) - first(dopplers)))),
+            prns = prns,
+            hypotheses = hypotheses,
+            operations = hypotheses * code_phases,
+        )
+    end
+    return
+end
+
+# Edge-triggered "slide N became visible", called from the two places that assign
+# `m.slide`. Anything started here must be idempotent — see `_start_once!`.
+function _on_slide_enter!(m::PresentationModel, slide::Int)
+    slide == SLIDE_DECODE && _start_receiver_once!(m)
+    return
 end
 
 # Spectrum: drain always (cheap, keep latest raw chunk); compute the FFT only while the
@@ -154,8 +232,10 @@ function _spawn_periodogram(m, hub)
     end)
 end
 
-# Deferred a moment so the light slides warm first (the receiver's first FFTW.MEASURE
-# planning is CPU-heavy).
+# Started on demand when the decoding slide is first shown (`_on_slide_enter!`), so the
+# decode and the fix happen live in front of the audience instead of during the intro;
+# `startup_delay` only matters for the eager path, where it lets the light slides warm
+# first (the receiver's first FFTW.MEASURE planning is CPU-heavy).
 #
 # File replay: the receiver processes the recording ONCE, on its own dedicated lossless
 # reader, then the fix is held on screen (`last_fix`). Looping a finite recording feeds a
@@ -166,14 +246,15 @@ end
 # shared fan-out. A live SDR has monotonic time, so it runs continuously.
 function _spawn_receiver(m, hub; startup_delay = 2.0)
     Base.errormonitor(Threads.@spawn begin
-        sleep(startup_delay)
+        startup_delay > 0 && sleep(startup_delay)
         cfg = hub.cfg
         if cfg.path === nothing
             _run_receiver!(m, hub.branches.receiver, hub.max_meas)   # live SDR: continuous
         else
             chan = SignalChannel{Complex{Int16}}(cfg.num_samples, 1)
             _spawn_file_reader!(chan, cfg.path, cfg.fs, cfg.num_samples,
-                cfg.realtime, false, Complex{Int16})                 # loop = false → one pass
+                cfg.realtime, false, Complex{Int16};                 # loop = false → one pass
+                stop = () -> m.quit)
             _run_receiver!(m, chan, hub.max_meas)                    # runs to EOF, then fix is held
         end
     end)
@@ -181,8 +262,9 @@ end
 
 function _run_receiver!(m::PresentationModel, chan, max_meas)
     data_channel = receive(chan, m.system, m.fs;
-        num_ants = NumAnts(1), max_meas = max_meas, interm_freq = m.interm_freq)
-    gui_channel = get_gui_data_channel(data_channel)
+        num_ants = NumAnts(1), max_meas = max_meas, interm_freq = m.interm_freq,
+        extract = nav_data_of_interest)          # + live decoder state (see nav_snapshot.jl)
+    gui_channel = nav_gui_channel(data_channel)
     consume_channel(gui_channel) do gui
         @lock m.lk begin
             m.gui = gui
@@ -203,6 +285,7 @@ function _spawn_acquisition(m, hub)
     Base.errormonitor(Threads.@spawn begin
         plan = plan_acquire(m.system, m.fs, collect(1:32);
             num_coherently_integrated_code_periods = 4, fft_flag = ESTIMATE)
+        _publish_acq_space!(m, plan)         # slide 2 quotes this plan's real search size
         minlen = 4 * samples_per_code(m.system, m.fs)
         last_full = 0.0                      # last full 32-PRN search
         last_surf = 0.0                      # last surface (single-PRN) render
@@ -271,6 +354,7 @@ function _spawn_tracking(m, hub)
         dc = CPUThreadedDownconvertAndCorrelator()
         plan = plan_acquire(m.system, m.fs, collect(1:32);
             num_coherently_integrated_code_periods = 4, fft_flag = ESTIMATE)
+        _publish_acq_space!(m, plan)         # backstop: this task runs even under --no-acq
         minlen = 4 * samples_per_code(m.system, m.fs)
         while !m.quit
             sel = @lock m.lk m.selected_prn
@@ -345,6 +429,7 @@ function _snapshot(m::PresentationModel)
         cursor = m.cursor, selected_prn = m.selected_prn, surface = m.surface,
         acquiring = m.acquiring, triangle = m.triangle, gui = m.gui, last_fix = m.last_fix,
         map_lines = m.map_lines, pg_ymin = m.pg_ymin, pg_ymax = m.pg_ymax, acq_zoom = m.acq_zoom,
+        acq_space = m.acq_space,
     )
 end
 
@@ -359,6 +444,19 @@ function _step_slide(m::PresentationModel, dir::Int)
     s
 end
 
+# Show slide `s` and fire the slide-enter hook on an actual change. The hook runs outside
+# the assignment's lock section (it takes `m.lk` itself) and only on the leading edge, so
+# revisiting a slide never restarts its work. Every slide change goes through here — key
+# handling via `_goto_slide!`, tests directly — so nothing can move slides without the hook.
+function _set_slide!(m::PresentationModel, s::Int)
+    prev = @lock m.lk ((old = m.slide; m.slide = s; old))
+    s == prev || _on_slide_enter!(m, s)
+    return s
+end
+
+"Step to the next/previous slide."
+_goto_slide!(m::PresentationModel, dir::Int) = _set_slide!(m, @lock m.lk _step_slide(m, dir))
+
 function update!(m::PresentationModel, e::KeyEvent)
     if e.key == :ctrl_c || e.key == :escape
         m.quit = true
@@ -369,11 +467,11 @@ function update!(m::PresentationModel, e::KeyEvent)
         return
     end
     if e.key == :right || (e.key == :char && e.char == 'n') || e.key == :pagedown
-        @lock m.lk (m.slide = _step_slide(m, 1))
+        _goto_slide!(m, 1)
         return
     end
     if e.key == :left || (e.key == :char && e.char == 'p') || e.key == :pageup
-        @lock m.lk (m.slide = _step_slide(m, -1))
+        _goto_slide!(m, -1)
         return
     end
     # acquisition slide: ↑/↓ directly select the previous/next detected PRN.
@@ -431,24 +529,72 @@ update!(::PresentationModel, ::Event) = nothing
 const SLIDE_TITLES = (
     "Real-Time GNSS Positioning with JuliaGNSS",
     "The raw spectrum: signals below the noise",
-    "GNSS codes & correlation",
+    "The signal I have to chase",
     "Acquisition: finding the satellites",
     "Tracking: the correlation triangle",
+    "Decoding: 50 bits per second",
     "PVT: position, velocity & time",
+    "Why Julia",
     "The JuliaGNSS ecosystem",
 )
+
+# The pipeline as a live progress bar for the talk: the stage the current slide is about
+# is highlighted, and a stage turns green only once it has ACTUALLY succeeded on this
+# run — satellites found, ephemeris decoded, fix computed. It doubles as the audience's
+# "you are here", and as honest proof that nothing on screen is canned.
+const PIPELINE_STAGES = ("Samples", "Acquisition", "Tracking", "Decoding", "PVT")
+
+# Which stage each slide is about (nothing = no stage, e.g. the title and closing slides).
+function _slide_stage(slide::Int)
+    slide == SLIDE_SPECTRUM && return 1
+    (slide == SLIDE_EXPLAIN || slide == SLIDE_ACQ) && return 2
+    slide == SLIDE_TRACK && return 3
+    slide == SLIDE_DECODE && return 4
+    slide == SLIDE_PVT && return 5
+    return nothing
+end
+
+# Has each stage actually produced something yet?
+function _stage_done(s)
+    sats = s.gui === nothing ? nothing : s.gui.sat_data
+    decoded = sats !== nothing && any(sd -> sd.complete, sats)
+    (s.chunk_count > 0,
+        !isempty(s.detected),
+        sats !== nothing && !isempty(sats),
+        decoded,
+        s.last_fix !== nothing)
+end
+
+function _render_pipeline!(buf, area::Rect, s)
+    done = _stage_done(s)
+    here = _slide_stage(s.slide)
+    x = area.x + 1
+    for (i, name) in enumerate(PIPELINE_STAGES)
+        x > right(area) && break
+        current = here == i
+        style = current ? tstyle(:accent, bold = true) :
+                done[i] ? tstyle(:success) : tstyle(:text_dim)
+        label = current ? "▸ " * name * " ◂" : name
+        x = set_string!(buf, x, area.y, label, style; max_x = right(area))
+        if i < length(PIPELINE_STAGES)
+            x = set_string!(buf, x, area.y, "  →  ", tstyle(:text_dim); max_x = right(area))
+        end
+    end
+    return
+end
 
 function view(m::PresentationModel, f::Frame)
     m.tick += 1
     s = _snapshot(m)
     buf = f.buffer
-    rows = split_layout(Layout(Vertical, [Fixed(1), Fill(), Fixed(1)]), f.area)
-    header, body, footer = rows[1], rows[2], rows[3]
+    rows = split_layout(Layout(Vertical, [Fixed(1), Fixed(1), Fill(), Fixed(1)]), f.area)
+    header, pipeline, body, footer = rows[1], rows[2], rows[3], rows[4]
 
     # header
     hdr = " ● JuliaGNSS  │  $(SLIDE_TITLES[s.slide+1])"
     set_string!(buf, header.x, header.y, rpad(hdr, header.width),
         tstyle(:title, bold = true); max_x = right(header))
+    _render_pipeline!(buf, pipeline, s)
 
     # body per slide
     if s.slide == SLIDE_INTRO
@@ -461,8 +607,12 @@ function view(m::PresentationModel, f::Frame)
         render_acquisition(m, f, body, s)
     elseif s.slide == SLIDE_TRACK
         render_tracking(m, f, body, s)
+    elseif s.slide == SLIDE_DECODE
+        render_decode(m, f, body, s)
     elseif s.slide == SLIDE_PVT
         render_pvt(m, f, body, s)
+    elseif s.slide == SLIDE_JULIA
+        render_julia(m, f, body, s)
     else
         render_outro(m, f, body, s)
     end
@@ -483,7 +633,9 @@ include("slide_spectrum.jl")
 include("slide_explain.jl")
 include("slide_acquisition.jl")
 include("slide_tracking.jl")
+include("slide_decode.jl")
 include("slide_pvt.jl")
+include("slide_julia.jl")
 include("slide_outro.jl")
 
 # ── Entry point ──────────────────────────────────────────────────────────────
@@ -537,8 +689,9 @@ function _warmup(system, fs; receiver::Bool = true)
         end
         close(ch)
     end
-    dc = receive(ch, system, fs; num_ants = NumAnts(1), max_meas = 2^11)
-    gc = get_gui_data_channel(dc)
+    dc = receive(ch, system, fs; num_ants = NumAnts(1), max_meas = 2^11,
+        extract = nav_data_of_interest)
+    gc = nav_gui_channel(dc)
     consume_channel(_ -> nothing, gc)
     return nothing
 end
@@ -558,9 +711,11 @@ function run_presentation(;
     fps::Int = 12,
     skip_acquisition::Bool = false,
     skip_receiver::Bool = false,
+    eager_receiver::Bool = false,
     hub::Union{StreamHub,Nothing} = nothing,
 )
-    m = PresentationModel(; fs, interm_freq, skip_acq = skip_acquisition, skip_rx = skip_receiver)
+    m = PresentationModel(; fs, interm_freq, skip_acq = skip_acquisition,
+        skip_rx = skip_receiver, eager_rx = eager_receiver)
     # The acquisition/tracking/receiver code paths are baked into the package precompile
     # cache (see the `@compile_workload` at the bottom of this file), so a fresh process
     # starts fast. This light DSP pass is cheap insurance in case the cache is stale.

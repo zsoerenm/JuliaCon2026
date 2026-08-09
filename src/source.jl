@@ -53,15 +53,20 @@ end
 
 # Background task: read `num_samples`-chunks from `path` into `out`, paced to real time
 # (sleep `num_samples/fs` per chunk), looping at EOF so the demo never runs dry.
-function _spawn_file_reader!(out, path, fs, num_samples, realtime, loop, type)
+#
+# `stop` is polled once per chunk and ends the reader early. A looping reader would
+# otherwise run until process exit — which is fine for the hub source (it lives as long as
+# the app) but not for a reader started on demand mid-run, e.g. the receiver's.
+function _spawn_file_reader!(out, path, fs, num_samples, realtime, loop, type;
+    stop = () -> false)
     period = num_samples / Float64(ustrip(Hz, fs))
     Base.errormonitor(Threads.@spawn begin
         try
             deadline = time()
-            while true
+            while !stop()
                 io = open(path)
                 try
-                    while true
+                    while !stop()
                         chunk = Matrix{type}(undef, num_samples, 1)  # fresh buffer per chunk
                         got = true
                         try
