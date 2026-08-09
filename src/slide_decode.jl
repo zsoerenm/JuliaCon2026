@@ -38,8 +38,10 @@ function render_decode(m::PresentationModel, f::Frame, area::Rect, s)
     sats = gui === nothing ? nothing : gui.sat_data
 
     rows = split_layout(Layout(Vertical, [Fill(), Fixed(2)]), area)
-    cols = split_layout(Layout(Horizontal, [Fixed(38), Fill()]), rows[1])
-    leftrows = split_layout(Layout(Vertical, [Fixed(9), Fill()]), cols[1])
+    # 42 wide / 10 tall: the narrower earlier split truncated the readiness counter and
+    # pushed the time-of-week caption onto the panel border.
+    cols = split_layout(Layout(Horizontal, [Fixed(42), Fill()]), rows[1])
+    leftrows = split_layout(Layout(Vertical, [Fixed(10), Fill()]), cols[1])
 
     _render_bitstream(m, buf, leftrows[1], sats, s)
     _render_readiness(buf, leftrows[2], sats)
@@ -99,7 +101,7 @@ function _render_bitstream(m, buf, area::Rect, sats, s)
         tstyle(:text_dim); max_x = right(c))
     y += 1
     # One subframe is 300 bits at 50 bit/s = 6 s; three of them carry the orbit.
-    set_string!(buf, x, y, "300 bits per subframe · 6 s each · 3 needed",
+    set_string!(buf, x, y, "300 bits/subframe · 6 s · 3 needed",
         tstyle(:text_dim); max_x = right(c))
     y += 2
 
@@ -114,7 +116,7 @@ function _render_bitstream(m, buf, area::Rect, sats, s)
         set_string!(buf, x, y, "time of week: ——", tstyle(:text_dim); max_x = right(c))
     else
         set_string!(buf, x, y, "time of week: $(shown) s", tstyle(:success, bold = true); max_x = right(c))
-        set_string!(buf, x, y + 1, "the satellite just told us the time",
+        y + 1 <= bottom(c) && set_string!(buf, x, y + 1, "the satellite just told us the time",
             tstyle(:text_dim); max_x = right(c))
     end
     return
@@ -157,8 +159,8 @@ function _render_readiness(buf, area::Rect, sats)
     # The suspense meter: this is what pays off on the next slide.
     n = length(sats)
     style = ready >= 4 ? tstyle(:success, bold = true) : tstyle(:warning, bold = true)
-    msg = ready >= 4 ? "$(ready) of $(n) validated — enough for a fix" :
-          "$(ready) of $(n) validated — 4 needed for a fix"
+    msg = ready >= 4 ? "$(ready)/$(n) validated — enough for a fix" :
+          "$(ready)/$(n) validated — need 4 for a fix"
     set_string!(buf, x, bottom(c), msg, style; max_x = right(c))
     return
 end
