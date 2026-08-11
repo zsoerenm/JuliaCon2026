@@ -71,6 +71,33 @@ function _subframe_states(sd)
     (states, cur)
 end
 
+"""
+    _decode_status(sd) -> (kind, subframe)
+
+What to say about progress. `kind` is one of:
+
+- `:complete` — all three ephemeris subframes decoded; there is nothing left to wait for
+- `:receiving` / `:almanac` — `subframe` is on the air now
+- `:between` — we have decoded values but no current subframe id
+- `:nosync` — genuinely nothing yet
+
+`:between` is the case that matters. `last_subframe_id` lives in `raw_data`, which
+`confirm_data` blanks on validation, so once the ephemeris is in (or the recording has
+run out) `cur` goes back to `nothing` while the grid is full. Deriving the caption from
+`cur` alone therefore announced "no subframe sync yet" underneath a complete ephemeris.
+"""
+function _decode_status(sd)
+    states, cur = _subframe_states(sd)
+    if all(n -> states[n] == :done, 1:length(EPHEMERIS_GROUPS))
+        return (:complete, cur)
+    elseif cur !== nothing
+        return (cur <= length(EPHEMERIS_GROUPS) ? :receiving : :almanac, cur)
+    elseif any(sym -> _eph_val(sd, sym) !== nothing, EPHEMERIS_FIELDS)
+        return (:between, nothing)
+    end
+    (:nosync, nothing)
+end
+
 # The satellite whose values we show in full. Prefer the one selected on the acquisition
 # slide (so the story follows one satellite across slides); otherwise the satellite that
 # is furthest along, so the grid is as alive as possible.
@@ -135,13 +162,12 @@ function _render_bitstream(m, buf, area::Rect, sats, s)
     got = count(sym -> _eph_val(sd, sym) !== nothing, EPHEMERIS_FIELDS)
     total = length(EPHEMERIS_FIELDS)
     states, cur = _subframe_states(sd)
+    kind, _ = _decode_status(sd)
 
-    if cur === nothing && got == 0
-        set_string!(buf, x, y, "PRN $(hero) — waiting for subframe sync…",
-            tstyle(:warning); max_x = right(c))
-    else
-        set_string!(buf, x, y, "PRN $(hero) — decoding ●", tstyle(:success, bold = true); max_x = right(c))
-    end
+    hdr, hstyle = kind == :complete ? ("PRN $(hero) — ephemeris complete ✓", tstyle(:success, bold = true)) :
+                  kind == :nosync ? ("PRN $(hero) — waiting for subframe sync…", tstyle(:warning)) :
+                  ("PRN $(hero) — decoding ●", tstyle(:success, bold = true))
+    set_string!(buf, x, y, hdr, hstyle; max_x = right(c))
     y += 2
 
     barw = max(4, c.width - 3)
@@ -168,15 +194,22 @@ function _render_bitstream(m, buf, area::Rect, sats, s)
         sx += 4
     end
     y += 1
-    if cur === nothing
-        set_string!(buf, x, y, "no subframe sync yet", tstyle(:text_dim); max_x = right(c))
-    elseif cur <= length(EPHEMERIS_GROUPS)
+    if kind == :complete
+        # Nothing left to wait for: no spinner, or it looks like it is still working.
+        set_string!(buf, x, y, "✓ all 3 ephemeris subframes decoded",
+            tstyle(:success, bold = true); max_x = right(c))
+    elseif kind == :receiving
         set_string!(buf, x, y, "$(spin) subframe $(cur) — $(SUBFRAME_NAMES[cur]) · 6 s",
             tstyle(:accent); max_x = right(c))
-    else
+    elseif kind == :almanac
         # Waiting out traffic we do not need is most of why a fix takes ~30 s.
         set_string!(buf, x, y, "$(spin) subframe $(cur) — almanac, not needed",
             tstyle(:text_dim); max_x = right(c))
+    elseif kind == :between
+        set_string!(buf, x, y, "$(spin) waiting for the next subframe",
+            tstyle(:accent); max_x = right(c))
+    else
+        set_string!(buf, x, y, "no subframe sync yet", tstyle(:text_dim); max_x = right(c))
     end
     y += 2
 
@@ -208,11 +241,27 @@ function _render_readiness(buf, area::Rect, sats)
         set_string!(buf, x, y, "none tracked yet", tstyle(:text_dim); max_x = right(c))
         return
     end
-    ready = 0
+    # Label the dots. Three unlabelled dots per PRN is a puzzle — they are ephemeris
+    # subframes 1-3 for that satellite. They light up almost together for every satellite,
+    # which looks wrong but is right: GPS subframe epochs are synchronised to GPS time
+    # across the whole constellation, so all satellites transmit subframe 1 in the same
+    # 6-second window, then subframe 2, and so on. What differs per satellite is the
+    # *contents* — each broadcasts its own orbit.
+    hx = x + 7
+    for i in 1:length(EPHEMERIS_GROUPS)
+        set_string!(buf, hx, y, string(i), tstyle(:text_dim); max_x = right(c))
+        hx += 2
+    end
+    set_string!(buf, hx + 1, y, "subframes", tstyle(:text_dim); max_x = right(c))
+    y += 1
+
+    # Counted over every satellite, not just the rows that fit: on a short terminal the
+    # loop below breaks early, and tallying inside it under-reported the count that the
+    # whole slide builds towards.
+    ready = count(sd -> sd.complete, sats)
     for prn in sort(collect(keys(sats)))
         y > bottom(c) - 2 && break
         sd = sats[prn]
-        sd.complete && (ready += 1)
         set_string!(buf, x, y, "PRN " * lpad(prn, 2), tstyle(:text); max_x = right(c))
         cx = x + 7
         for g in EPHEMERIS_GROUPS

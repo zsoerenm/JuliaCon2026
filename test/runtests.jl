@@ -299,6 +299,35 @@ end
     @test st[1] == st[2] == st[3] == :done
 end
 
+@testset "decode status never contradicts the grid" begin
+    # Regression: `last_subframe_id` also lives in raw_data, so after validation (or once
+    # the recording runs out at 61.4 s) it goes back to `nothing` while the grid is full.
+    # The caption was derived from it alone and announced "no subframe sync yet" directly
+    # underneath a completely decoded ephemeris.
+    vals(syms) = (; (s => 1.0 for s in syms)...)
+    everything = vals(GP.EPHEMERIS_FIELDS)
+    fieldsyms(g) = (first(f) for f in last(g))
+
+    # The reported case: fully decoded, raw wiped, no current subframe.
+    @test GP._decode_status((raw = (;), data = everything))[1] == :complete
+    # Same, with the recording still running and raw refilling.
+    @test GP._decode_status((raw = (last_subframe_id = 2,), data = everything))[1] == :complete
+
+    # Mid-decode states still report what is on the air.
+    sf1 = vals(fieldsyms(GP.EPHEMERIS_GROUPS[1]))
+    k, n = GP._decode_status((raw = merge(sf1, (last_subframe_id = 2,)), data = (;)))
+    @test (k, n) == (:receiving, 2)
+    k, n = GP._decode_status((raw = merge(sf1, (last_subframe_id = 4,)), data = (;)))
+    @test (k, n) == (:almanac, 4)
+
+    # Decoded something, but no current subframe id: we have synced before, so saying
+    # "no sync yet" would be false.
+    @test GP._decode_status((raw = sf1, data = (;)))[1] == :between
+
+    # Genuinely nothing yet is the only case that may claim no sync.
+    @test GP._decode_status((raw = (;), data = (;)))[1] == :nosync
+end
+
 @testset "no top-level name is defined in two src files" begin
     # Every `src/*.jl` is `include`d into the single `GNSSPresentation` module, so a
     # duplicate top-level name silently redefines the other one. A `const SPINNER` on the
