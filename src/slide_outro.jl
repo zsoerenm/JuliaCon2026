@@ -12,6 +12,12 @@ const ECOSYSTEM = [
     (GNSSReceiver, "GNSSReceiver.jl", "the full receiver: acquire → track → decode → PVT"),
 ]
 
+const NEXT_STEPS = (
+    "Better CN0 estimation",
+    "Hardware correlators (FPGA)",
+    "Vector tracking loops",
+)
+
 _pkgver(mod) = try
     "v" * string(pkgversion(mod))
 catch
@@ -39,8 +45,14 @@ function render_outro(m::PresentationModel, f::Frame, area::Rect, s)
         y += 1
     end
     y += 1
-    set_string!(buf, x, y, "Next: Galileo E1/E5a alongside GPS, multi-antenna arrays, and more live hardware.",
-        tstyle(:text); max_x = right(content)); y += 1
+    set_string!(buf, x, y, "What's next:", tstyle(:text); max_x = right(content)); y += 1
+    for item in NEXT_STEPS
+        y > bottom(content) - 2 && break
+        set_string!(buf, x + 2, y, "→ " * item, tstyle(:primary); max_x = right(content))
+        y += 1
+    end
+    y += 1
+    y > bottom(content) - 1 && return
     set_string!(buf, x, y, "Issues, PRs and recordings all welcome — it is a small ecosystem and it is open.",
         tstyle(:text_dim); max_x = right(content)); y += 2
     set_string!(buf, x, y, "github.com/JuliaGNSS      Thank you!  ·  Questions?",
