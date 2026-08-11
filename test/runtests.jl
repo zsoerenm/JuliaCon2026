@@ -326,6 +326,13 @@ end
 
     # Genuinely nothing yet is the only case that may claim no sync.
     @test GP._decode_status((raw = (;), data = (;)))[1] == :nosync
+
+    # "checking" (decoded but not yet validated) needs ALL THREE subframes. Testing only
+    # 1 and 3 claimed "checking" while 2 was missing — i.e. while the satellite was
+    # plainly still transmitting it.
+    sf13 = merge(vals(fieldsyms(GP.EPHEMERIS_GROUPS[1])), vals(fieldsyms(GP.EPHEMERIS_GROUPS[3])))
+    @test !all(g -> GP._group_done((raw = sf13, data = (;)), g), GP.EPHEMERIS_GROUPS)
+    @test all(g -> GP._group_done((raw = everything, data = (;)), g), GP.EPHEMERIS_GROUPS)
 end
 
 @testset "no top-level name is defined in two src files" begin

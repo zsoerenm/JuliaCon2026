@@ -164,7 +164,9 @@ function _render_bitstream(m, buf, area::Rect, sats, s)
     states, cur = _subframe_states(sd)
     kind, _ = _decode_status(sd)
 
-    hdr, hstyle = kind == :complete ? ("PRN $(hero) — ephemeris complete ✓", tstyle(:success, bold = true)) :
+    # "decoded", not "complete": the readiness strip reserves "validated" for the
+    # decoder's own gate, and the two must not be confusable.
+    hdr, hstyle = kind == :complete ? ("PRN $(hero) — ephemeris decoded ✓", tstyle(:success, bold = true)) :
                   kind == :nosync ? ("PRN $(hero) — waiting for subframe sync…", tstyle(:warning)) :
                   ("PRN $(hero) — decoding ●", tstyle(:success, bold = true))
     set_string!(buf, x, y, hdr, hstyle; max_x = right(c))
@@ -270,13 +272,17 @@ function _render_readiness(buf, area::Rect, sats)
                 done ? tstyle(:success, bold = true) : tstyle(:text_dim); max_x = right(c))
             cx += 2
         end
-        # The dots show subframes *received*; the tick shows the ephemeris *validated*
-        # for positioning (which additionally needs a consistent TOW and matching
-        # IODC/IODE). All three dots can be lit while validation is still pending — so
-        # the two indicators must read differently, or they look like a contradiction.
+        # Two different things, deliberately worded differently. The dots mean subframes
+        # *decoded* — we hold the numbers. The tick means the decoder has *validated* them
+        # for positioning: `is_decoding_completed_for_positioning`, which additionally
+        # needs TOW and the integrity/alert flags, requires IODC[3:10] == IODE_Sub_2 ==
+        # IODE_Sub_3 (proving all three subframes belong to one ephemeris), and must pass
+        # `confirm_data`'s vote. "checking" is the gap between the two, and it needs all
+        # three subframes — testing only 1 and 3 claimed "checking" while 2 was missing,
+        # i.e. while the satellite was still plainly transmitting.
         if sd.complete
             set_string!(buf, cx + 1, y, "✓ validated", tstyle(:success); max_x = right(c))
-        elseif _group_done(sd, EPHEMERIS_GROUPS[3]) && _group_done(sd, EPHEMERIS_GROUPS[1])
+        elseif all(g -> _group_done(sd, g), EPHEMERIS_GROUPS)
             set_string!(buf, cx + 1, y, "· checking", tstyle(:text_dim); max_x = right(c))
         end
         y += 1
