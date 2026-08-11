@@ -157,7 +157,14 @@ slow or bursty consumer (the receiver during its periodic acquisition) never sta
 source (which would overflow a real SDR) nor freeze the light slides. Slides only change
 which branch's latest result is rendered — the stream and the receiver stay warm across
 all of them. File replay is paced to `num_samples / fs` so it exercises this
-backpressure exactly like a live SDR.
+backpressure like a live SDR.
+
+> **Pacing is easy to get wrong.** `sleep` cannot hit a 10 ms target exactly, and an
+> earlier version of `_spawn_file_reader!` reset its deadline to `now` after every
+> overshoot — forgiving the debt instead of repaying it, so "real-time" replay actually
+> ran at **0.63×**, stretching the whole demo by ~1.6×. The reader now keeps an absolute
+> schedule and only resyncs past `MAX_PACING_LAG`; there is a regression test for it. For
+> reference, the receiver itself runs at ~1.9× real time, so it is never the limit here.
 
 Key modules under `src/`:
 

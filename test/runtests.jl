@@ -97,6 +97,33 @@ end
     @test (maximum(p) - sum(p) / length(p)) < 20.0          # dB
 end
 
+@testset "real-time file replay is actually real time" begin
+    # Regression: the paced reader used to reset its deadline to `now` on any `sleep`
+    # overshoot, forgiving the debt every chunk instead of repaying it. That walked
+    # permanently slow — 0.85x with no consumer, 0.63x under the app — and stretched the
+    # whole demo by ~1.6x. Bounds are loose enough for a loaded CI box but would still
+    # have caught that.
+    NS = 10 * SPC
+    period = NS / 1.0e7
+    ch = GP.SignalChannel{Complex{Int16}}(NS, 1)
+    t0 = time()
+    GP._spawn_file_reader!(ch, DATA, FS, NS, true, true, Complex{Int16};
+        stop = () -> time() - t0 > 3.0)
+    n = 0
+    GP._poll_drain(c -> (n += 1), ch)
+    rate = n * period / (time() - t0)
+    @test 0.9 <= rate <= 1.1
+
+    # …and --no-realtime must still run flat out.
+    ch2 = GP.SignalChannel{Complex{Int16}}(NS, 1)
+    t1 = time()
+    GP._spawn_file_reader!(ch2, DATA, FS, NS, false, true, Complex{Int16};
+        stop = () -> time() - t1 > 2.0)
+    n2 = 0
+    GP._poll_drain(c -> (n2 += 1), ch2)
+    @test n2 * period / (time() - t1) > 1.5
+end
+
 @testset "integration: persistent stream + processing (per-slide gating)" begin
     GP._warmup(GPSL1CA(), FS)   # serial compile of all heavy paths before concurrent tasks
     cfg = GP.StreamConfig(; path = DATA, fs = FS, num_samples = 10 * SPC,

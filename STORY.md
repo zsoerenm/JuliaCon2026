@@ -52,21 +52,27 @@ moment the decoding slide is entered, on a 24-core container:
 | Event | t |
 |---|---|
 | first satellite tracked | 1.2 s |
-| first time-of-week decoded | 17.9 s |
-| first ephemeris value on screen | 28.2 s |
-| all 26 orbit numbers, all 10 satellites | ~45 s |
-| ephemeris validated → **first PVT fix** | 56.3 s |
+| first time-of-week decoded | 11.6 s |
+| first ephemeris value on screen | 17.7 s |
+| ephemeris validated → **first PVT fix** | 41.9 s |
 
 The fix lands at 52.177171° N, 4.490035° E with 10 satellites.
 
-**Two things to check on your own hardware before relying on this.** First, the fix
-arrives ~56 s after the slide opens, not the ~30 s originally assumed — the decoding and
-PVT slides together need to cover roughly a minute, or the receiver has to be started a
-slide earlier. Second, and more important: the receiver had processed only **35.3 s of
-signal in 56.3 s of wall time (~0.63× real time)** — i.e. on that machine it does *not*
-keep up with the 10 MSPS stream. Since keeping up is the talk's central claim, this is
-the number to re-measure on the presentation machine; if it is below 1.0× there too, the
-claim needs either better hardware, fewer branches running during the demo, or rewording.
+So the decoding and PVT slides together have to cover roughly 45 s. That fits the budget
+below, but it is worth timing on the presentation machine — and if it runs long, the
+receiver can be started a slide earlier (Tracking) for ~75 s of head start.
+
+**The receiver is not the bottleneck.** It processes the stream at about **1.9× real
+time** under full app load (measured with `--no-realtime`: 49.9 s of signal in 26.1 s of
+wall clock, reaching a fix 15.9 s after the slide opens). The talk's "keeps up with the
+antenna" claim holds with room to spare.
+
+What *was* slow was the file replay's own pacing — see the pacing note in
+`_spawn_file_reader!`. Two fixes took the paced reader from 0.63× to ~0.87× under load
+(0.99× in isolation, with nothing consuming it). The residue is scheduler contention on a
+busy thread pool, not DSP throughput, and a live SDR does not have the problem at all
+because the hardware clocks the samples. **Expect the live demo to converge faster than
+the file rehearsal, not slower.**
 
 ## Slide beats
 
@@ -157,8 +163,8 @@ Maps onto the abstract's promised 6 / 4 / 2 split.
 | 2:00–3:30 | The signal I have to chase (the conceptual core; do not rush it) |
 | 3:30–5:00 | Acquisition — live |
 | 5:00–6:15 | Tracking |
-| 6:15–7:15 | Decoding — **receiver starts**; ephemeris fills live (~28 s to first value) |
-| 7:15–8:30 | PVT — the fix lands (~56 s after the decoding slide opened) |
+| 6:15–7:15 | Decoding — **receiver starts**; ephemeris fills live (~18 s to first value) |
+| 7:15–8:30 | PVT — the fix lands (~42 s after the decoding slide opened) |
 | 8:30–10:30 | Why Julia |
 | 10:30–12:00 | Ecosystem, next steps, close |
 

@@ -51,12 +51,28 @@ function probe_max_meas(path, num_samples; type = Complex{Int16})
     max(m, 1)
 end
 
+# How far the paced reader may fall behind its schedule before it gives up on catching up
+# and resynchronises to now. Ordinary `sleep` overshoot (a few ms) must NOT trigger this —
+# see the pacing note in `_spawn_file_reader!` — but a real stall (machine hiccup, a
+# debugger, a suspended laptop) should not be repaid by dumping a huge backlog.
+const MAX_PACING_LAG = 0.5   # seconds
+
 # Background task: read `num_samples`-chunks from `path` into `out`, paced to real time
 # (sleep `num_samples/fs` per chunk), looping at EOF so the demo never runs dry.
 #
 # `stop` is polled once per chunk and ends the reader early. A looping reader would
 # otherwise run until process exit — which is fine for the hub source (it lives as long as
 # the app) but not for a reader started on demand mid-run, e.g. the receiver's.
+#
+# Pacing. `deadline` is an ABSOLUTE schedule (`deadline += period` every chunk), and the
+# lag is only forgiven past `MAX_PACING_LAG`. That distinction is load-bearing: at 10 ms
+# per chunk, `sleep` overshoots its target by a few ms every single time, and an earlier
+# version reset `deadline = time()` on any overshoot. That erased the debt each iteration
+# instead of repaying it, so the schedule walked permanently slower than real time —
+# measured at 0.85x with no consumer at all and 0.63x under the full app, which stretched
+# the whole demo by ~1.6x. Keeping the absolute schedule lets an overshoot be repaid by
+# emitting the next chunk immediately; raw reading runs at ~3x real time, so the reader
+# recovers within a chunk or two and the long-run average lands on 1.0x.
 function _spawn_file_reader!(out, path, fs, num_samples, realtime, loop, type;
     stop = () -> false)
     period = num_samples / Float64(ustrip(Hz, fs))
@@ -79,8 +95,11 @@ function _spawn_file_reader!(out, path, fs, num_samples, realtime, loop, type;
                         if realtime
                             deadline += period
                             dt = deadline - time()
-                            dt > 0 && sleep(dt)
-                            deadline < time() && (deadline = time())  # don't spiral if behind
+                            if dt > 0
+                                sleep(dt)
+                            elseif -dt > MAX_PACING_LAG
+                                deadline = time()   # real stall: resync, don't dump a backlog
+                            end
                         else
                             yield()
                         end

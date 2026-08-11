@@ -251,7 +251,13 @@ function _spawn_receiver(m, hub; startup_delay = 2.0)
         if cfg.path === nothing
             _run_receiver!(m, hub.branches.receiver, hub.max_meas)   # live SDR: continuous
         else
-            chan = SignalChannel{Complex{Int16}}(cfg.num_samples, 1)
+            # Second argument is the channel DEPTH, not the antenna count (antennas are
+            # the type parameter N, default 1). A depth of 1 lock-steps the reader to the
+            # receiver's *instantaneous* rate, so every periodic-reacquisition burst
+            # stalls the paced reader and steals wall-clock time it can never win back.
+            # A deeper buffer lets the reader hold real-time pacing across those bursts —
+            # the same job a real SDR's DMA ring does.
+            chan = SignalChannel{Complex{Int16}}(cfg.num_samples, 64)
             _spawn_file_reader!(chan, cfg.path, cfg.fs, cfg.num_samples,
                 cfg.realtime, false, Complex{Int16};                 # loop = false → one pass
                 stop = () -> m.quit)
