@@ -299,6 +299,29 @@ end
     @test st[1] == st[2] == st[3] == :done
 end
 
+@testset "no top-level name is defined in two src files" begin
+    # Every `src/*.jl` is `include`d into the single `GNSSPresentation` module, so a
+    # duplicate top-level name silently redefines the other one. A `const SPINNER` on the
+    # decoding slide shadowed the acquisition slide's 10-frame braille spinner with a
+    # 4-tuple, and the acquisition slide then threw `BoundsError: NTuple{4,Char} at
+    # index [5]` — at render time, on a slide the author was not editing.
+    srcdir = joinpath(@__DIR__, "..", "src")
+    owners = Dict{String,Vector{String}}()
+    for file in filter(f -> endswith(f, ".jl"), readdir(srcdir))
+        for line in eachline(joinpath(srcdir, file))
+            mc = match(r"^const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+            mf = match(r"^function\s+([A-Za-z_][A-Za-z0-9_!]*)\s*\(", line)
+            name = mc !== nothing ? mc.captures[1] : mf !== nothing ? mf.captures[1] : nothing
+            name === nothing && continue
+            push!(get!(owners, name, String[]), file)
+        end
+    end
+    dupes = Dict(n => unique(fs) for (n, fs) in owners if length(unique(fs)) > 1)
+    # Methods of one generic function may legitimately be spread across files; constants
+    # and single-file helpers may not. Report whatever we find so the message is useful.
+    @test isempty(dupes) || (@info "duplicate top-level names" dupes; false)
+end
+
 @testset "all slides render headlessly" begin
     m = GP.PresentationModel(; fs = FS)
     rect = Tachikoma.Rect(1, 1, 140, 44)

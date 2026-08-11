@@ -18,7 +18,11 @@ const EPH_FLASH = 1.2             # seconds a freshly decoded value stays highli
 # ~30 s rather than ~18: if you tune in during 4, you wait for the cycle to come round.
 const SUBFRAME_NAMES = ("clock", "ephemeris 1", "ephemeris 2", "almanac", "almanac")
 const NUM_SUBFRAMES = 5
-const SPINNER = ('◐', '◓', '◑', '◒')
+# Named for this slide: every `slide_*.jl` is `include`d into the one `GNSSPresentation`
+# module, so a bare `SPINNER` here silently redefined the acquisition slide's 10-frame
+# braille spinner and made it index a 4-tuple out of bounds. Keep slide-local constants
+# prefixed — there is a test that enforces it.
+const DECODE_SPINNER = ('◐', '◓', '◑', '◒')
 
 _eph_get(raw, sym) = raw === nothing ? nothing :
                      (hasproperty(raw, sym) ? getproperty(raw, sym) : nothing)
@@ -150,7 +154,7 @@ function _render_bitstream(m, buf, area::Rect, sats, s)
 
     # The subframe indicator: what is on the air right now. This is the loading status —
     # the grid can sit still for six seconds, but this never does.
-    spin = SPINNER[mod(m.tick ÷ 3, length(SPINNER))+1]
+    spin = DECODE_SPINNER[mod(m.tick ÷ 3, length(DECODE_SPINNER))+1]
     set_string!(buf, x, y, "subframes", tstyle(:text_dim); max_x = right(c))
     sx = x + 10
     for n in 1:NUM_SUBFRAMES
