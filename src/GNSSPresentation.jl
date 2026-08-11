@@ -28,6 +28,7 @@ using SignalChannels: SignalChannel, consume_channel
 using PositionVelocityTime: get_LLA, get_sat_enu, PVTSolution
 using UnicodeMaps: worldmap
 using Dictionaries: dictionary, Dictionary
+using Tachikoma: Style, ColorRGB
 using FFTW: ESTIMATE
 using PrecompileTools: @compile_workload
 import DSP
@@ -39,6 +40,7 @@ include("colormap.jl")
 include("triangle_correlator.jl")
 include("source.jl")
 include("acq_surface.jl")
+include("qrcode.jl")
 include("nav_snapshot.jl")
 
 const NUM_SLIDES = 9            # see slide index constants below
@@ -87,6 +89,8 @@ mutable struct PresentationModel <: Model
     eph_seen::Dict{Tuple{Int,Symbol},Int}   # (prn, field) → tick it first appeared (flash timing)
     last_tow::Dict{Int,Int}          # prn → most recent decoded TOW (the decoder's flickers out)
     acq_space::Any                   # NamedTuple of real search-space sizes | nothing
+    chase_state::Symbol              # slide 2 replica search: :waiting | :sliding | :locked
+    chase_t0::Float64                # time() the search was started, for frame-rate-independent motion
 end
 
 function PresentationModel(; system = GPSL1CA(), fs = 10.0e6Hz, interm_freq = 0.0Hz,
@@ -96,7 +100,7 @@ function PresentationModel(; system = GPSL1CA(), fs = 10.0e6Hz, interm_freq = 0.
         0, nothing, AcquisitionResults[], Int[], 1, nothing, nothing, nothing,
         false, nothing, nothing, nothing, nothing, nothing, nothing, 13, 0.0, 0.0,
         Inf, -Inf, Tuple{Float64,Float64}[], false,   # acq_zoom: default to full code-phase view
-        Dict{Tuple{Int,Symbol},Int}(), Dict{Int,Int}(), nothing)
+        Dict{Tuple{Int,Symbol},Int}(), Dict{Int,Int}(), nothing, :waiting, 0.0)
 end
 
 should_quit(m::PresentationModel) = m.quit
@@ -480,6 +484,25 @@ function update!(m::PresentationModel, e::KeyEvent)
         _goto_slide!(m, -1)
         return
     end
+    # "The signal I have to chase": the replica sits deliberately misaligned until the
+    # presenter starts the search, so the slide can be *talked over* before it moves.
+    # Space (or `a`) runs it; once aligned it locks green. Any of them again re-arms it,
+    # so the beat can be replayed for a question.
+    if m.slide == SLIDE_EXPLAIN
+        ch = e.key == :char ? e.char : '\0'
+        go = e.key == :space || ch == ' ' || ch == 'a'
+        reset = ch == 'r'
+        if go || reset
+            @lock m.lk begin
+                if reset || m.chase_state != :waiting
+                    m.chase_state = :waiting           # re-arm, replay the beat
+                else
+                    m.chase_state = :sliding
+                    m.chase_t0 = time()
+                end
+            end
+        end
+    end
     # acquisition slide: ↑/↓ directly select the previous/next detected PRN.
     if m.slide == SLIDE_ACQ
         if e.key == :up || e.key == :down
@@ -624,7 +647,8 @@ function view(m::PresentationModel, f::Frame)
     end
 
     # footer
-    slidehint = s.slide == SLIDE_ACQ ? "[↑/↓] select PRN  [z] zoom/full  " :
+    slidehint = s.slide == SLIDE_EXPLAIN ? "[space] search  [r] reset  " :
+                s.slide == SLIDE_ACQ ? "[↑/↓] select PRN  [z] zoom/full  " :
                 s.slide == SLIDE_PVT ? "[+/-] zoom  [hjkl] pan map  [0] recenter  " : ""
     render(StatusBar(
             left = [Span(" [←/→] slide  ", tstyle(:text_dim)),

@@ -13,6 +13,7 @@ GNSSReceiver = "c84cffac-6943-4fe6-9449-f6d23817af8b"
 GNSSSignals = "52c80523-2a4e-5c38-8979-05588f836870"
 PositionVelocityTime = "52ec0b5e-ee36-11ea-211c-3d844fc5682d"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
+QRCoders = "f42e9828-16f3-11ed-2883-9126170b272d"
 SignalChannels = "59ec5e11-ed95-4167-ad38-35055440f478"
 SoapySDR = "4fa426e6-03fd-45b2-b2dd-25f726820c03"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
@@ -23,4 +24,5 @@ UnicodePlots = "b8865327-cd53-5732-bb35-84acbb429228"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
+QRCoders = "1.0.1"
 UnicodePlots = "3.8.4"

@@ -10,12 +10,32 @@ const CLOCKS = (
     ("12 minutes", "what I have.", "All three have to fit in this talk."),
 )
 
+# Encoded once, at precompile time, and baked into the cache — the matrix never changes.
+const GNSSRECEIVER_URL = "https://github.com/JuliaGNSS/GNSSReceiver.jl"
+const GNSSRECEIVER_QR = qr_matrix(GNSSRECEIVER_URL)
+
 function render_intro(m::PresentationModel, f::Frame, area::Rect, s)
     buf = f.buffer
     content = render(Block(; title = "JuliaCon 2026", border_style = tstyle(:border),
             title_style = tstyle(:accent, bold = true)), area, buf)
     x = content.x + 2
     y = content.y + 1
+
+    # QR to GNSSReceiver.jl, parked in the right margin. Drawn first so the text below can
+    # clip against it rather than run underneath.
+    qrw, qrh = qr_size(GNSSRECEIVER_QR)
+    textmax = right(content)
+    if content.width >= qrw + 46 && content.height >= qrh + 3
+        qrx = right(content) - qrw
+        qry = content.y + 1
+        draw_qr!(buf, qrx, qry, GNSSRECEIVER_QR; max_x = right(content), max_y = bottom(content))
+        cap = "GNSSReceiver.jl"
+        set_string!(buf, qrx + max(0, (qrw - length(cap)) ÷ 2), qry + qrh + 1, cap,
+            tstyle(:primary, bold = true); max_x = right(content))
+        set_string!(buf, qrx + max(0, (qrw - length("github.com/JuliaGNSS")) ÷ 2), qry + qrh + 2,
+            "github.com/JuliaGNSS", tstyle(:text_dim); max_x = right(content))
+        textmax = qrx - 3
+    end
     set_string!(buf, x, y, "Real-Time GNSS Positioning with JuliaGNSS",
         tstyle(:title, bold = true); max_x = right(content)); y += 1
     set_string!(buf, x, y, "From SDR Signals to Your Location",

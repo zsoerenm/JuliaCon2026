@@ -16,14 +16,14 @@ and the timing plan — is written down in **[STORY.md](STORY.md)**.
 
 | # | Slide | What it shows (live) |
 |---|-------|----------------------|
-| 0 | **Title** | The three clocks (50 bit/s · 10 MSPS · 12 min) + a "● streaming" heartbeat |
+| 0 | **Title** | The three clocks (50 bit/s · 10 MSPS · 12 min), a "● streaming" heartbeat, and a **QR code** to GNSSReceiver.jl |
 | 1 | **Spectrum** | Live periodogram — a flat noise floor; the GPS signals are *below* it |
-| 2 | **The signal I have to chase** | Nav bits × PRN chips at their real (very different) time scales, a replica **sliding** against the received code, and the true size of the code-phase × Doppler search |
+| 2 | **The signal I have to chase** | Nav bits × PRN chips at their real (very different) time scales, a replica you **slide into alignment on a keypress** (it locks green when it matches), and the true size of the code-phase × Doppler search |
 | 3 | **Acquisition** | 32-PRN search bar; pick a detected PRN → its **3D correlation surface** |
 | 4 | **Tracking** | The **correlation triangle** from a real many-tap correlator; Early/Prompt/Late colored |
 | 5 | **Decoding** | **Starts the receiver.** Subframe progress at 50 bit/s, the time-of-week, and ephemeris values popping in one 30-bit word at a time; "N of M ready — 4 needed for a fix" |
 | 6 | **PVT** | CN0 bars, a **direction-of-arrival sky plot**, the computed position, and an **OpenStreetMap** view of it (UnicodeMaps.jl) |
-| 7 | **Why Julia** | The composability argument, made from this repository's own code |
+| 7 | **Why Julia** | Tracking.jl's 3-tap default and this repo's 31-tap `TriangleCorrelator` **side by side**, sampling the same triangle — the multiple-dispatch story in one picture |
 | 8 | **Ecosystem** | The JuliaGNSS packages, next steps + closing |
 
 A pipeline strip rides along under the title on every slide. The current stage is
@@ -31,7 +31,10 @@ highlighted, and a stage turns **green only once it has actually succeeded on th
 (satellites detected, ephemeris decoded, fix computed) — so it doubles as a progress bar
 for the talk and as evidence that nothing on screen is canned.
 
-Navigate with **← / →** (or PgUp/PgDn). On the acquisition slide, **↑ / ↓** select the
+Navigate with **← / →** (or PgUp/PgDn). On the "signal I have to chase" slide, the local
+replica starts deliberately misaligned and stays put until you press **space** (or `a`) —
+so the slide can be talked over before anything moves; it then slides in over ~3.5 s and
+**locks green** on alignment. **r** re-arms it to replay the beat. On the acquisition slide, **↑ / ↓** select the
 previous/next detected PRN (shown on the acquisition and tracking slides), and **z**
 toggles the correlation heatmap between the default full code-phase (0–1023
 chips) view — where the peak moves over time — and a zoomed (±1.5 chips around the peak)

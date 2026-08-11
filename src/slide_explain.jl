@@ -55,6 +55,32 @@ function _fmt_pow10(n::Real)
     "$(round(n / 10.0^e; digits = 1))·10$(_superscript(e))"
 end
 
+# How far off the replica starts, and how long the search takes once triggered. A few
+# chips is enough to be unmistakably misaligned at 2 cells/chip while still resolving as
+# the *same* code pattern, so the audience sees a shift rather than a different signal.
+const CHASE_START_CHIPS = 7.0
+const CHASE_DURATION = 3.5     # seconds
+
+"""
+    _chase_phase!(m) -> (offset_chips, state)
+
+Current replica offset and search state, advancing `:sliding → :locked` when the offset
+reaches zero. Called from the renderer (the only place that knows the slide is visible),
+so the animation runs only while slide 2 is on screen.
+"""
+function _chase_phase!(m::PresentationModel)
+    @lock m.lk begin
+        m.chase_state == :waiting && return (CHASE_START_CHIPS, :waiting)
+        m.chase_state == :locked && return (0.0, :locked)
+        frac = (time() - m.chase_t0) / CHASE_DURATION
+        if frac >= 1.0
+            m.chase_state = :locked
+            return (0.0, :locked)
+        end
+        return (CHASE_START_CHIPS * (1 - frac), :sliding)
+    end
+end
+
 function render_explain(m::PresentationModel, f::Frame, area::Rect, s)
     buf = f.buffer
     c = render(Block(; title = "The signal I have to chase", border_style = tstyle(:border),
@@ -101,16 +127,25 @@ function render_explain(m::PresentationModel, f::Frame, area::Rect, s)
     set_string!(buf, x, y, "received", tstyle(:text_dim); max_x = wx - 1)
     _draw_code_wave!(buf, wx, right(c), y, y + 1, code, L, 0.0, 2, wx)
     y += 2
-    # The replica slides continuously: this is the chase, and it never lines up by luck.
-    # The offset starts well away from zero so the very first frame already shows a
-    # mismatch rather than a suspiciously perfect alignment.
-    cp = mod(m.tick * 0.17 + 7.3, Float64(L))
+
+    # The replica sits misaligned until the presenter starts the search (space), so this
+    # can be talked over before anything moves; then it slides in and locks green. Driven
+    # by wall time, not frame count, so `--fps` doesn't change how long the beat takes.
+    cp, state = _chase_phase!(m)
+    rstyle = state == :locked ? (tstyle(:success, bold = true), tstyle(:success, dim = true)) :
+             (tstyle(:warning, bold = true), tstyle(:warning, dim = true))
     set_string!(buf, x, y, "my replica", tstyle(:text_dim); max_x = wx - 1)
     _draw_code_wave!(buf, wx, right(c), y, y + 1, code, L, cp, 2, wx;
-        plus = tstyle(:warning, bold = true), minus = tstyle(:warning, dim = true))
+        plus = rstyle[1], minus = rstyle[2])
     y += 2
-    set_string!(buf, wx, y, "…which is off by $(round(cp; digits = 1)) chips right now. Slide it until it matches.",
-        tstyle(:text_dim); max_x = right(c))
+    msg, mstyle = state == :waiting ?
+                  ("off by $(round(cp; digits = 1)) chips — press [space] to start searching",
+        tstyle(:text_dim)) :
+                  state == :sliding ?
+                  ("searching… off by $(round(cp; digits = 1)) chips", tstyle(:warning)) :
+                  ("● aligned — the codes match, and the correlation peaks. That is a satellite found.",
+        tstyle(:success, bold = true))
+    set_string!(buf, wx, y, msg, mstyle; max_x = right(c))
     y += 2
 
     # ── ④ the size of the search ──────────────────────────────────────────────

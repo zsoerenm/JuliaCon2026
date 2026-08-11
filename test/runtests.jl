@@ -193,6 +193,58 @@ end
     m.quit = true
 end
 
+@testset "QR renders back to the exact module matrix" begin
+    # The encoder is QRCoders' problem; the half-block packing is ours, and a QR that is
+    # off by one row is unscannable. Draw it, read the glyphs back, rebuild the matrix.
+    m = GP.qr_matrix(GP.GNSSRECEIVER_URL)
+    w, h = GP.qr_size(m)
+    @test size(m, 1) == size(m, 2)          # square, quiet zone included
+    @test h == cld(size(m, 1), 2)
+    rect = Tachikoma.Rect(1, 1, w + 4, h + 4)
+    buf = Tachikoma.Buffer(rect)
+    GP.draw_qr!(buf, 2, 2, m; max_x = Tachikoma.right(rect), max_y = Tachikoma.bottom(rect))
+
+    # `buffer_to_text` trims blank cells, so read the cells themselves.
+    cell(x, y) = buf.content[(y-rect.y)*rect.width+(x-rect.x)+1]
+
+    back = falses(size(m)...)
+    for (row, r) in enumerate(1:2:size(m, 1)), col in 1:size(m, 2)
+        ch = cell(1 + col, 1 + row).char
+        top, bot = ch == '█' ? (true, true) : ch == '▀' ? (true, false) :
+                   ch == '▄' ? (false, true) : (false, false)
+        back[r, col] = top
+        r + 1 <= size(m, 1) && (back[r+1, col] = bot)
+    end
+    @test back == m                          # every module survived the packing
+
+    # Dark modules must be drawn dark-on-light: an inverted QR defeats many scanners,
+    # and the quiet zone has to be painted white rather than left transparent.
+    @test GP.QR_DARK.fg == Tachikoma.ColorRGB(0x00, 0x00, 0x00)
+    @test GP.QR_DARK.bg == Tachikoma.ColorRGB(0xff, 0xff, 0xff)
+    @test all(cell(1 + c, 2).style.bg == Tachikoma.ColorRGB(0xff, 0xff, 0xff)
+              for c in 1:size(m, 2))         # top row is quiet zone: white, not unpainted
+end
+
+@testset "slide 2 replica search is presenter-driven" begin
+    m = GP.PresentationModel(; fs = FS)
+    GP._set_slide!(m, GP.SLIDE_EXPLAIN)
+    # Starts parked and misaligned — nothing moves until the presenter asks.
+    @test GP._chase_phase!(m) == (GP.CHASE_START_CHIPS, :waiting)
+    @test GP._chase_phase!(m) == (GP.CHASE_START_CHIPS, :waiting)
+
+    GP.update!(m, Tachikoma.KeyEvent(' '))
+    off, st = GP._chase_phase!(m)
+    @test st == :sliding && 0 < off <= GP.CHASE_START_CHIPS
+
+    # Once the search has run its course it locks at zero and stays there.
+    @lock m.lk (m.chase_t0 = time() - GP.CHASE_DURATION - 1)
+    @test GP._chase_phase!(m) == (0.0, :locked)
+    @test GP._chase_phase!(m) == (0.0, :locked)
+
+    GP.update!(m, Tachikoma.KeyEvent('r'))     # re-arm to replay the beat
+    @test GP._chase_phase!(m) == (GP.CHASE_START_CHIPS, :waiting)
+end
+
 @testset "all slides render headlessly" begin
     m = GP.PresentationModel(; fs = FS)
     rect = Tachikoma.Rect(1, 1, 140, 44)
