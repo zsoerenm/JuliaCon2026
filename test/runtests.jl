@@ -245,6 +245,60 @@ end
     @test GP._chase_phase!(m) == (GP.CHASE_START_CHIPS, :waiting)
 end
 
+@testset "decoding slide survives ephemeris validation" begin
+    # Regression: the grid read `raw_data` only. `GNSSDecoder.confirm_data` promotes raw
+    # into `data` and blanks raw, so every value vanished the moment the ephemeris
+    # validated — while `complete` and the time-of-week stayed on screen. Looked like a
+    # revisit bug; was really "whatever happens after ~40 s".
+    D = GP.GNSSDecoder.GPSL1CAData
+    blank = D()
+    full = D(; trans_week = 947, sqrt_A = 5153.6, TOW = 64800)
+
+    @test GP._eph_val((raw = blank, data = full), :trans_week) == 947     # validated: kept
+    @test GP._eph_val((raw = blank, data = full), :sqrt_A) == 5153.6
+    @test GP._eph_val((raw = full, data = blank), :trans_week) == 947     # provisional: shown
+    @test GP._eph_val((raw = blank, data = blank), :trans_week) === nothing
+    # A validated value must win over a stale provisional one.
+    @test GP._eph_val((raw = D(; trans_week = 1), data = full), :trans_week) == 947
+end
+
+@testset "subframe indicator tracks what is on the air" begin
+    # `_eph_val`/`_eph_get` go through `hasproperty`, so NamedTuples stand in for decoder
+    # data. Values are never held back — this indicator is what carries progress during
+    # the six seconds a subframe takes to arrive.
+    G = GP.EPHEMERIS_GROUPS
+    fieldsyms(g) = (first(f) for f in last(g))
+    vals(syms) = (; (s => 1.0 for s in syms)...)
+
+    # Nothing decoded, no sync yet.
+    st, cur = GP._subframe_states((raw = (;), data = (;)))
+    @test cur === nothing
+    @test all(==(:pending), st)
+    @test length(st) == GP.NUM_SUBFRAMES == 5
+
+    # Subframe 1 complete, currently receiving 2.
+    sd = (raw = merge(vals(fieldsyms(G[1])), (last_subframe_id = 2,)), data = (;))
+    st, cur = GP._subframe_states(sd)
+    @test cur == 2
+    @test st[1] == :done && st[2] == :receiving && st[3] == :pending
+
+    # Sitting through subframe 4: almanac, nothing we need — this is why a fix takes ~30 s
+    # rather than ~18, and the indicator has to say so instead of looking stalled.
+    st, cur = GP._subframe_states((raw = (last_subframe_id = 4,), data = (;)))
+    @test cur == 4 && st[4] == :receiving
+    @test GP.SUBFRAME_NAMES[4] == "almanac"
+
+    # 4 and 5 can never be :done — we do not collect their fields.
+    everything = vals(GP.EPHEMERIS_FIELDS)
+    st, _ = GP._subframe_states((raw = merge(everything, (last_subframe_id = 1,)), data = (;)))
+    @test st[1] == st[2] == st[3] == :done
+    @test st[4] == st[5] == :pending
+
+    # A validated ephemeris (raw wiped by confirm_data) must still read as done.
+    st, _ = GP._subframe_states((raw = (;), data = everything))
+    @test st[1] == st[2] == st[3] == :done
+end
+
 @testset "all slides render headlessly" begin
     m = GP.PresentationModel(; fs = FS)
     rect = Tachikoma.Rect(1, 1, 140, 44)

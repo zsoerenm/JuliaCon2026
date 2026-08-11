@@ -26,7 +26,7 @@ import GNSSSignals, Acquisition, Tracking, PositionVelocityTime, SignalChannels,
     GNSSDecoder
 using SignalChannels: SignalChannel, consume_channel
 using PositionVelocityTime: get_LLA, get_sat_enu, PVTSolution
-using UnicodeMaps: worldmap
+using UnicodeMaps: worldmap, TileSource
 using Dictionaries: dictionary, Dictionary
 using Tachikoma: Style, ColorRGB
 using FFTW: ESTIMATE
@@ -86,7 +86,7 @@ mutable struct PresentationModel <: Model
     pg_ymax::Float64                 # periodogram y-axis max [dB] (windowed)
     pg_win::Vector{Tuple{Float64,Float64}}  # sliding window of per-frame (min,max)
     acq_zoom::Bool                   # acquisition surface: true=±chips around peak, false=full code
-    eph_seen::Dict{Tuple{Int,Symbol},Int}   # (prn, field) → tick it first appeared (flash timing)
+    eph_seen::Dict{Tuple{Int,Symbol},Float64}  # (prn, field) → time() first seen (flash timing)
     last_tow::Dict{Int,Int}          # prn → most recent decoded TOW (the decoder's flickers out)
     acq_space::Any                   # NamedTuple of real search-space sizes | nothing
     chase_state::Symbol              # slide 2 replica search: :waiting | :sliding | :locked
@@ -100,7 +100,7 @@ function PresentationModel(; system = GPSL1CA(), fs = 10.0e6Hz, interm_freq = 0.
         0, nothing, AcquisitionResults[], Int[], 1, nothing, nothing, nothing,
         false, nothing, nothing, nothing, nothing, nothing, nothing, 13, 0.0, 0.0,
         Inf, -Inf, Tuple{Float64,Float64}[], false,   # acq_zoom: default to full code-phase view
-        Dict{Tuple{Int,Symbol},Int}(), Dict{Int,Int}(), nothing, :waiting, 0.0)
+        Dict{Tuple{Int,Symbol},Float64}(), Dict{Int,Int}(), nothing, :waiting, 0.0)
 end
 
 should_quit(m::PresentationModel) = m.quit
@@ -401,20 +401,54 @@ function _spawn_tracking(m, hub)
     end)
 end
 
-# Render the position on an OpenStreetMap tile with UnicodeMaps (network download, a few
-# seconds) — done on a background task, once per (position, panel-size), so the PVT slide
-# only ever draws the cached, parsed span-lines. The PVT slide publishes what it wants via
-# `m.map_want`; here we render it and cache the parsed lines in `m.map_lines`.
+# Render the position on an OpenStreetMap tile with UnicodeMaps (network download) — done
+# on a background task, once per (position, panel-size), so the PVT slide only ever draws
+# the cached, parsed span-lines. The PVT slide publishes what it wants via `m.map_want`;
+# here we render it and cache the parsed lines in `m.map_lines`.
+#
+# ONE `TileSource`, reused. `worldmap`'s `source` keyword defaults to `TileSource()`, and a
+# default argument is evaluated per call — so calling `worldmap` without it (a) re-fetched
+# OpenFreeMap's TileJSON over the network just to resolve the tile URL template, and (b)
+# threw away the source's decoded-tile cache every time, re-downloading every tile on the
+# first fix and again on every pan and zoom. UnicodeMaps says as much: "Reuse a single
+# `source` across calls to benefit from its tile cache."
+#
+# The source is also built and warmed as soon as a fix exists, rather than when the PVT
+# slide first asks for a map, so the TileJSON round-trip and the tiles around the fix are
+# already in hand by the time anyone is looking at that panel.
 function _spawn_map(m::PresentationModel)
     Base.errormonitor(Threads.@spawn begin
+        src = nothing                      # resolved once, lazily (it does network I/O)
+        warmed = false
         while !m.quit
+            if src === nothing
+                src = try
+                    TileSource()
+                catch
+                    nothing                # offline: fall through, the panel stays blank
+                end
+                src === nothing && (sleep(2.0); continue)
+            end
+            # Prefetch the tiles around the first fix before the slide is ever shown.
+            if !warmed
+                fix = @lock m.lk m.last_fix
+                if fix !== nothing
+                    warmed = true
+                    try
+                        lla = get_LLA(fix.pvt)
+                        worldmap(; center = (lla.lon, lla.lat), zoom = 13,
+                            size = (80, 24), marker = true, source = src)
+                    catch
+                    end
+                end
+            end
             want, have = @lock m.lk (m.map_want, m.map_key)
             if want !== nothing && want != have
                 lat, lon, w, h, zoom, marker = want
                 if w >= 8 && h >= 4
                     try
                         img = worldmap(; center = (lon, lat), zoom = Int(zoom),
-                            size = (Int(w), Int(h)), marker = marker)
+                            size = (Int(w), Int(h)), marker = marker, source = src)
                         lines = [parse_ansi(String(l)) for l in split(sprint(show, img), "\n")]
                         @lock m.lk begin
                             m.map_lines = lines
@@ -703,6 +737,21 @@ function _warmup(system, fs; receiver::Bool = true)
         UP.annotate!(dp, 30cos(0.5), 30sin(0.5), "1"; color = :green)
         UP.label!(dp, :t, "0°"; color = UP.BORDER_COLOR[])
         foreach(l -> parse_ansi(String(l)), split(string(dp; color = true), '\n'))
+    catch
+    end
+
+    # Warm the UnicodeMaps render path. This is the PVT slide's real latency: a cold first
+    # `worldmap` call costs ~3.1 s of compilation against ~0.4 s of actual tile download,
+    # so without this the map appears to "take ages to load" and it looks like the network.
+    #
+    # A `TileSource` pointing at a path that cannot be fetched keeps this offline: every
+    # `get_tile` download fails, `get_tile` catches it and yields empty layers, and the
+    # whole render/label/braille pipeline still compiles. That matters because this runs
+    # inside `@compile_workload`, where assuming network access would be wrong.
+    try
+        img = worldmap(; center = (0.0, 0.0), zoom = 13, size = (80, 24), marker = true,
+            source = TileSource("file:///unicodemaps-warmup-{z}-{x}-{y}.pbf"))
+        foreach(l -> parse_ansi(String(l)), split(sprint(show, img), "\n"))
     catch
     end
 

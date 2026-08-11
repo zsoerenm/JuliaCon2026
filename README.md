@@ -21,7 +21,7 @@ and the timing plan — is written down in **[STORY.md](STORY.md)**.
 | 2 | **The signal I have to chase** | Nav bits × PRN chips at their real (very different) time scales, a replica you **slide into alignment on a keypress** (it locks green when it matches), and the true size of the code-phase × Doppler search |
 | 3 | **Acquisition** | 32-PRN search bar; pick a detected PRN → its **3D correlation surface** |
 | 4 | **Tracking** | The **correlation triangle** from a real many-tap correlator; Early/Prompt/Late colored |
-| 5 | **Decoding** | **Starts the receiver.** Subframe progress at 50 bit/s, the time-of-week, and ephemeris values popping in one 30-bit word at a time; "N of M ready — 4 needed for a fix" |
+| 5 | **Decoding** | **Starts the receiver.** A live subframe indicator (`1✓ 2✓ 3· 4◐ 5·`, naming what is on the air), the time-of-week, ephemeris values as they decode, and "N/M validated — need 4 for a fix" |
 | 6 | **PVT** | CN0 bars, a **direction-of-arrival sky plot**, the computed position, and an **OpenStreetMap** view of it (UnicodeMaps.jl) |
 | 7 | **Why Julia** | Tracking.jl's 3-tap default and this repo's 31-tap `TriangleCorrelator` **side by side**, sampling the same triangle — the multiple-dispatch story in one picture |
 | 8 | **Ecosystem** | The JuliaGNSS packages, next steps + closing |
@@ -54,6 +54,16 @@ east), and **0** recenters on the fix. **q** / **Esc** quits.
 - Network access to download a slice of the sample recording, and (for the PVT slide's
   map) to fetch OpenStreetMap vector tiles via UnicodeMaps.jl. Without network the map
   panel stays blank; the numeric position + Google Maps link are still shown.
+
+> **Why the map used to be slow.** A cold first `worldmap` call cost ~3.5 s, of which only
+> ~0.4 s was the network — the rest was first-call compilation, now paid at precompile time
+> (`_warmup` renders a map against a deliberately unreachable `TileSource`, so the workload
+> stays offline). On top of that, `worldmap`'s `source` keyword defaults to `TileSource()`,
+> and a default argument is evaluated *per call*: every render re-fetched OpenFreeMap's
+> TileJSON and threw away the decoded-tile cache, so each pan and zoom re-downloaded
+> everything. The app now builds one `TileSource` and reuses it — a repeat render drops
+> from ~0.35 s to ~0.02 s — and warms it with the tiles around the first fix as soon as
+> that fix exists, before the PVT slide is ever shown.
 
 > **CPU note.** SignalChannels' lock-free channels busy-wait for microsecond latency;
 > this app instead polls-with-sleep, so idle CPU stays low. Two knobs reduce it further:

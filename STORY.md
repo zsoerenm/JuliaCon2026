@@ -126,18 +126,36 @@ value` roughly every 0.6 s and fill over ~18 s.
 Read **`raw_data`, not `data`** — `data` is all-or-nothing and stays blank until
 subframes 1–3 all validate.
 
-Two fields turned out to be unusable as written and are worth remembering:
-`num_bits_after_valid_syncro_sequence` stays `nothing` long after words are demonstrably
-decoding (driving a progress bar from it showed "searching for the preamble… 0/300"
-while values were landing), so progress is measured by how many orbit numbers have
-actually arrived; and `TOW` is cleared again whenever the next one isn't exactly
-previous+1, so it flickers and has to be latched.
+Three decoder fields turned out to be traps, all found by running against the real
+recording rather than synthetic signals:
+
+- **`raw_data` is not a monotonically filling buffer.** `confirm_data` promotes it into
+  `data` on a successful validation and blanks it on several branches, so a grid that
+  reads `raw` alone empties itself the moment the ephemeris validates — while `complete`
+  and the time-of-week stay on screen. Read the validated copy and fall back to the
+  provisional one.
+- **`num_bits_after_valid_syncro_sequence` stays `nothing`** long after words are
+  demonstrably decoding, so a progress bar driven from it reads "searching for the
+  preamble… 0/300" while values are landing. Count arrived orbit numbers instead.
+- **`TOW` is cleared** whenever the next one isn't exactly previous+1, so it flickers and
+  has to be latched.
+
+Values are shown the instant they decode, never held back. `GNSSDecoder` can only hand
+them over a subframe at a time (`decode_syncro_sequence` waits for all 300 bits, then
+decodes ten words in one call), so the grid fills in three jumps of nine. What carries the
+wait *between* jumps is the **subframe indicator**: `subframes 1✓ 2✓ 3· 4◐ 5·` plus a
+caption naming what is on the air. It also earns its place as teaching — when it says
+*"subframe 4 — almanac, not needed"* it is explaining out loud why a fix takes ~30 s and
+not ~18: all five subframes cycle every 30 s, and if you tune in during 4 you wait for the
+cycle to come round.
 
 Four panels: a decode-progress bar counting orbit numbers received; one hero PRN's 26 ephemeris slots
-grouped by subframe, dim until their word arrives; one plain-language line on what the
-numbers *mean* (this is the satellite's orbit — with it we know exactly where it was
-when it sent this bit); and a per-PRN readiness strip carrying the suspense counter,
-**"N of M ready — 4 needed for a fix"**, which is what pays off into PVT.
+grouped by subframe; one plain-language line on what the numbers *mean* (this is the
+satellite's orbit — with it we know exactly where it was when it sent this bit); and a
+per-PRN readiness strip carrying the suspense counter, **"N/M validated — need 4 for a
+fix"**, which is what pays off into PVT. The strip's dots mean *subframes received* and
+the tick means *validated for positioning*; they have to read differently, or all three
+dots lit next to "0 validated" looks like a contradiction.
 
 ### Slide 7 in detail
 

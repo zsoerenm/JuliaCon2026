@@ -1,20 +1,71 @@
 # Slide 5 — decoding. The receiver is started the moment this slide is first shown
 # (`_on_slide_enter!`), so everything here fills in live, from zero, in front of the
-# audience: the subframe progress bar, the time-of-week the satellite reports every six
-# seconds, and the ephemeris values popping in one 30-bit word at a time.
+# audience: which subframe is arriving, the time-of-week the satellite reports every six
+# seconds, and the ephemeris values.
 #
-# All of it is read from the decoder's `raw_data` accumulator (see nav_snapshot.jl) —
-# nothing here is replayed or faked. At 50 bit/s a subframe takes 6 s and the three
-# ephemeris subframes take ~18 s, which is the slide's natural length.
+# Values appear as soon as they are decoded — never held back. `GNSSDecoder` can only hand
+# them over a subframe at a time (`decode_syncro_sequence` waits for all 300 bits, then
+# decodes ten words in one call), so the grid fills in three jumps. The subframe indicator
+# below carries the progress *between* those jumps, which is what makes the wait legible
+# without delaying anything.
 
 const SUBFRAME_BITS = 300         # 300 bits at 50 bit/s = 6 s
 const NAV_BIT_RATE = 50
+const EPH_FLASH = 1.2             # seconds a freshly decoded value stays highlighted
+
+# All five subframes cycle every 30 s. Only 1–3 carry the ephemeris we need; 4 and 5 are
+# almanac and ionospheric data. Showing them is the honest explanation of why a fix takes
+# ~30 s rather than ~18: if you tune in during 4, you wait for the cycle to come round.
+const SUBFRAME_NAMES = ("clock", "ephemeris 1", "ephemeris 2", "almanac", "almanac")
+const NUM_SUBFRAMES = 5
+const SPINNER = ('◐', '◓', '◑', '◒')
 
 _eph_get(raw, sym) = raw === nothing ? nothing :
                      (hasproperty(raw, sym) ? getproperty(raw, sym) : nothing)
 
-"Is every field of ephemeris group `g` present in `raw`?"
-_group_done(raw, g) = all(f -> _eph_get(raw, first(f)) !== nothing, last(g))
+"""
+    _eph_val(sd, sym)
+
+The best value we hold for `sym`: the *validated* copy if there is one, otherwise the
+provisional one still being accumulated.
+
+Reading `raw` alone is wrong, and the failure is delayed and confusing. `raw_data` is not
+a monotonically filling buffer: `GNSSDecoder.confirm_data` promotes it into `data` on a
+successful validation and resets it to a blank `GPSL1CAData()` on several branches, so the
+whole grid emptied itself the moment the ephemeris validated — while `complete` stayed
+true and the time-of-week stayed on screen. That looked like a bug on revisiting the
+slide, but it was simply whatever happened after ~40 s.
+"""
+_eph_val(sd, sym) =
+    let v = _eph_get(sd.data, sym)
+        v === nothing ? _eph_get(sd.raw, sym) : v
+    end
+
+"Is every field of ephemeris group `g` decoded?"
+_group_done(sd, g) = all(f -> _eph_val(sd, first(f)) !== nothing, last(g))
+
+"""
+    _subframe_states(sd) -> (states, current)
+
+`states[n]` is `:done`, `:receiving` or `:pending` for each of the five subframes, and
+`current` is the subframe the decoder last saw (or `nothing` before the first sync).
+Subframes 4 and 5 are never `:done` — we do not collect their fields — so they read as
+pending traffic we have to sit through.
+"""
+function _subframe_states(sd)
+    cur = _eph_get(sd.raw, :last_subframe_id)
+    cur = (cur isa Integer && 1 <= cur <= NUM_SUBFRAMES) ? Int(cur) : nothing
+    states = map(1:NUM_SUBFRAMES) do n
+        if n <= length(EPHEMERIS_GROUPS) && _group_done(sd, EPHEMERIS_GROUPS[n])
+            :done
+        elseif n == cur
+            :receiving
+        else
+            :pending
+        end
+    end
+    (states, cur)
+end
 
 # The satellite whose values we show in full. Prefer the one selected on the acquisition
 # slide (so the story follows one satellite across slides); otherwise the satellite that
@@ -24,7 +75,7 @@ function _hero_prn(sats, selected)
     selected !== nothing && haskey(sats, selected) && return selected
     best, bestscore = nothing, -1
     for (prn, sd) in pairs(sats)
-        score = count(sym -> _eph_get(sd.raw, sym) !== nothing, EPHEMERIS_FIELDS)
+        score = count(sym -> _eph_val(sd, sym) !== nothing, EPHEMERIS_FIELDS)
         if score > bestscore
             best, bestscore = prn, score
         end
@@ -38,10 +89,8 @@ function render_decode(m::PresentationModel, f::Frame, area::Rect, s)
     sats = gui === nothing ? nothing : gui.sat_data
 
     rows = split_layout(Layout(Vertical, [Fill(), Fixed(2)]), area)
-    # 42 wide / 10 tall: the narrower earlier split truncated the readiness counter and
-    # pushed the time-of-week caption onto the panel border.
     cols = split_layout(Layout(Horizontal, [Fixed(42), Fill()]), rows[1])
-    leftrows = split_layout(Layout(Vertical, [Fixed(10), Fill()]), cols[1])
+    leftrows = split_layout(Layout(Vertical, [Fixed(12), Fill()]), cols[1])
 
     _render_bitstream(m, buf, leftrows[1], sats, s)
     _render_readiness(buf, leftrows[2], sats)
@@ -57,7 +106,7 @@ function render_decode(m::PresentationModel, f::Frame, area::Rect, s)
     return
 end
 
-# ── The bit stream: progress through the current 300-bit subframe, plus the time ──
+# ── Progress: overall orbit numbers, and which subframe is arriving right now ──
 function _render_bitstream(m, buf, area::Rect, sats, s)
     c = render(Block(; title = "The bit stream — 50 bit/s", border_style = tstyle(:border),
             title_style = tstyle(:accent, bold = true)), area, buf)
@@ -75,43 +124,66 @@ function _render_bitstream(m, buf, area::Rect, sats, s)
     hero === nothing && return
     sd = sats[hero]
 
-    # Progress is measured by how much of the orbit has actually arrived, NOT by
-    # `bits_in_subframe`: that field stays `nothing` for a long time while words are
-    # demonstrably being decoded, so driving the bar from it showed "searching for the
-    # preamble… 0/300" on screen while values were already landing in the grid.
-    got = count(sym -> _eph_get(sd.raw, sym) !== nothing, EPHEMERIS_FIELDS)
+    # Progress is measured by how many orbit numbers we hold, NOT by `bits_in_subframe`:
+    # that field stays `nothing` long after words are demonstrably decoding, so driving
+    # the bar from it showed "searching for the preamble… 0/300" while values were
+    # already landing in the grid.
+    got = count(sym -> _eph_val(sd, sym) !== nothing, EPHEMERIS_FIELDS)
     total = length(EPHEMERIS_FIELDS)
-    sub = _eph_get(sd.raw, :last_subframe_id)
-    started = got > 0 || (sub isa Integer && sub > 0)
+    states, cur = _subframe_states(sd)
 
-    if started
-        set_string!(buf, x, y, "PRN $(hero) — decoding ●", tstyle(:success, bold = true); max_x = right(c))
-    else
+    if cur === nothing && got == 0
         set_string!(buf, x, y, "PRN $(hero) — waiting for subframe sync…",
             tstyle(:warning); max_x = right(c))
+    else
+        set_string!(buf, x, y, "PRN $(hero) — decoding ●", tstyle(:success, bold = true); max_x = right(c))
     end
     y += 2
+
     barw = max(4, c.width - 3)
     filled = round(Int, barw * got / total)
     set_string!(buf, x, y, "█"^filled, tstyle(:primary, bold = true); max_x = right(c))
     set_string!(buf, x + filled, y, "░"^max(0, barw - filled), tstyle(:text_dim); max_x = right(c))
     y += 1
-    subtxt = (sub isa Integer && sub > 0) ? "   subframe $(sub)" : ""
-    set_string!(buf, x, y, "$(got) / $(total) orbit numbers$(subtxt)",
-        tstyle(:text_dim); max_x = right(c))
+    set_string!(buf, x, y, "$(got) / $(total) orbit numbers", tstyle(:text_dim); max_x = right(c))
+    y += 2
+
+    # The subframe indicator: what is on the air right now. This is the loading status —
+    # the grid can sit still for six seconds, but this never does.
+    spin = SPINNER[mod(m.tick ÷ 3, length(SPINNER))+1]
+    set_string!(buf, x, y, "subframes", tstyle(:text_dim); max_x = right(c))
+    sx = x + 10
+    for n in 1:NUM_SUBFRAMES
+        st = states[n]
+        mark, style = st == :done ? ('✓', tstyle(:success, bold = true)) :
+                      st == :receiving ? (spin, tstyle(:accent, bold = true)) :
+                      ('·', tstyle(:text_dim))
+        set_string!(buf, sx, y, string(n), st == :pending ? tstyle(:text_dim) : tstyle(:text);
+            max_x = right(c))
+        set_string!(buf, sx + 1, y, string(mark), style; max_x = right(c))
+        sx += 4
+    end
     y += 1
-    # One subframe is 300 bits at 50 bit/s = 6 s; three of them carry the orbit.
-    set_string!(buf, x, y, "300 bits/subframe · 6 s · 3 needed",
-        tstyle(:text_dim); max_x = right(c))
+    if cur === nothing
+        set_string!(buf, x, y, "no subframe sync yet", tstyle(:text_dim); max_x = right(c))
+    elseif cur <= length(EPHEMERIS_GROUPS)
+        set_string!(buf, x, y, "$(spin) subframe $(cur) — $(SUBFRAME_NAMES[cur]) · 6 s",
+            tstyle(:accent); max_x = right(c))
+    else
+        # Waiting out traffic we do not need is most of why a fix takes ~30 s.
+        set_string!(buf, x, y, "$(spin) subframe $(cur) — almanac, not needed",
+            tstyle(:text_dim); max_x = right(c))
+    end
     y += 2
 
     # Time of week — the answer to the tracking slide's question, arriving every 6 s.
     # The decoder clears TOW again whenever the next one isn't exactly prev+1, so the raw
     # field flickers; we latch the last value actually decoded rather than blinking "——"
     # at the audience while every other field on the slide is filled in.
-    tow = _eph_get(sd.raw, :TOW)
+    tow = _eph_val(sd, :TOW)
     tow isa Integer && (m.last_tow[hero] = tow)
     shown = get(m.last_tow, hero, nothing)
+    y > bottom(c) && return
     if shown === nothing
         set_string!(buf, x, y, "time of week: ——", tstyle(:text_dim); max_x = right(c))
     else
@@ -140,7 +212,7 @@ function _render_readiness(buf, area::Rect, sats)
         set_string!(buf, x, y, "PRN " * lpad(prn, 2), tstyle(:text); max_x = right(c))
         cx = x + 7
         for g in EPHEMERIS_GROUPS
-            done = _group_done(sd.raw, g)
+            done = _group_done(sd, g)
             set_string!(buf, cx, y, done ? "●" : "·",
                 done ? tstyle(:success, bold = true) : tstyle(:text_dim); max_x = right(c))
             cx += 2
@@ -151,7 +223,7 @@ function _render_readiness(buf, area::Rect, sats)
         # the two indicators must read differently, or they look like a contradiction.
         if sd.complete
             set_string!(buf, cx + 1, y, "✓ validated", tstyle(:success); max_x = right(c))
-        elseif _group_done(sd.raw, EPHEMERIS_GROUPS[3]) && _group_done(sd.raw, EPHEMERIS_GROUPS[1])
+        elseif _group_done(sd, EPHEMERIS_GROUPS[3]) && _group_done(sd, EPHEMERIS_GROUPS[1])
             set_string!(buf, cx + 1, y, "· checking", tstyle(:text_dim); max_x = right(c))
         end
         y += 1
@@ -165,7 +237,7 @@ function _render_readiness(buf, area::Rect, sats)
     return
 end
 
-# ── The ephemeris grid: values pop in as their 30-bit word passes parity ──
+# ── The ephemeris grid: values appear as soon as their subframe is decoded ────
 function _render_ephemeris(m, buf, area::Rect, sats, s)
     hero = sats === nothing ? nothing : _hero_prn(sats, s.selected_prn)
     title = hero === nothing ? "Navigation message" : "Navigation message — PRN $(hero)"
@@ -184,37 +256,31 @@ function _render_ephemeris(m, buf, area::Rect, sats, s)
     end
     sd = sats[hero]
     colw = max(16, (c.width - 4) ÷ 3)
+    now = time()
 
     for (gi, (gname, fields)) in enumerate(EPHEMERIS_GROUPS)
         gx = x + (gi - 1) * colw
         gy = y
-        done = all(fp -> _eph_get(sd.raw, first(fp)) !== nothing, fields)
+        gmax = min(right(c), gx + colw - 2)
+        done = _group_done(sd, (gname, fields))
         set_string!(buf, gx, gy, gname,
-            done ? tstyle(:success, bold = true) : tstyle(:secondary, bold = true);
-            max_x = min(right(c), gx + colw - 2))
+            done ? tstyle(:success, bold = true) : tstyle(:secondary, bold = true); max_x = gmax)
         gy += 1
         for (sym, label) in fields
             gy > bottom(c) && break
-            v = _eph_get(sd.raw, sym)
-            txt = fmt_eph(v)
-            # Flash a value for ~1 s after it first appears, so the arrival is visible.
-            fresh = false
-            if txt !== nothing
-                key = (hero, sym)
-                seen = get!(m.eph_seen, key, m.tick)
-                fresh = (m.tick - seen) < 14
-            end
-            set_string!(buf, gx, gy, rpad(label, 7), tstyle(:text_dim);
-                max_x = min(right(c), gx + colw - 2))
+            txt = fmt_eph(_eph_val(sd, sym))
+            set_string!(buf, gx, gy, rpad(label, 7), tstyle(:text_dim); max_x = gmax)
             if txt === nothing
-                set_string!(buf, gx + 7, gy, "····", tstyle(:text_dim);
-                    max_x = min(right(c), gx + colw - 2))
+                set_string!(buf, gx + 7, gy, "····", tstyle(:text_dim); max_x = gmax)
             else
-                # Dim while only provisional; bright once the validated copy agrees.
+                # Flash briefly on first sight, then settle: bright once the validated
+                # copy agrees, dimmer while still provisional.
+                seen = get!(m.eph_seen, (hero, sym), now)
+                fresh = (now - seen) < EPH_FLASH
                 confirmed = _eph_get(sd.data, sym) !== nothing
                 st = fresh ? tstyle(:accent, bold = true) :
                      confirmed ? tstyle(:text) : tstyle(:primary)
-                set_string!(buf, gx + 7, gy, txt, st; max_x = min(right(c), gx + colw - 2))
+                set_string!(buf, gx + 7, gy, txt, st; max_x = gmax)
             end
             gy += 1
         end

@@ -100,11 +100,11 @@ const EPHEMERIS_GROUPS = (
         (:T_GD, "T_GD"), (:t_0c, "t_oc"),
         (:a_f2, "a_f2"), (:a_f1, "a_f1"), (:a_f0, "a_f0"),
     )),
-    ("Subframe 2 — orbit shape", (
+    ("Subframe 2 — ephemeris 1", (
         (:IODE_Sub_2, "IODE"), (:C_rs, "C_rs"), (:Δn, "Δn"), (:M_0, "M_0"),
         (:C_uc, "C_uc"), (:e, "e"), (:C_us, "C_us"), (:sqrt_A, "√A"), (:t_0e, "t_oe"),
     )),
-    ("Subframe 3 — orbit orientation", (
+    ("Subframe 3 — ephemeris 2", (
         (:C_ic, "C_ic"), (:Ω_0, "Ω_0"), (:C_is, "C_is"), (:i_0, "i_0"),
         (:C_rc, "C_rc"), (:ω, "ω"), (:Ω_dot, "Ω̇"), (:i_dot, "i̇"),
     )),
