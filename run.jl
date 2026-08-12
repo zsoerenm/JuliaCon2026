@@ -23,6 +23,7 @@ function parse_args(args)
         "path" => joinpath(@__DIR__, "data", "LimeSDR_Bands-L1.int16"),
         "sdr" => false, "realtime" => true, "fps" => 12, "fs" => 10.0e6Hz,
         "no_acq" => false, "no_rx" => false, "if_khz" => nothing, "gain" => 60.0,
+        "eager_rx" => false,
     )
     i = 1
     while i <= length(args)
@@ -33,6 +34,8 @@ function parse_args(args)
             opts["no_acq"] = true
         elseif a == "--no-receiver"
             opts["no_rx"] = true
+        elseif a == "--eager-receiver"
+            opts["eager_rx"] = true
         elseif a == "--if-khz" && i < length(args)
             opts["if_khz"] = parse(Float64, args[i+1]); i += 1
         elseif a == "--no-realtime"
@@ -72,7 +75,8 @@ function main()
         interm_freq = (if_set ? opts["if_khz"] : 0.0) * 1e3 * Hz
         hub = live_hub(fs, num_samples, opts["gain"])
         run_presentation(; fs, interm_freq, num_samples, hub, fps = opts["fps"],
-            skip_acquisition = opts["no_acq"], skip_receiver = opts["no_rx"])
+            skip_acquisition = opts["no_acq"], skip_receiver = opts["no_rx"],
+            eager_receiver = opts["eager_rx"])
     else
         path = opts["path"]
         if !isfile(path)
@@ -91,7 +95,8 @@ function main()
         # The ION LimeSDR recording is at a 420 kHz IF (from its .sdrx metadata).
         interm_freq = (if_set ? opts["if_khz"] : 420.0) * 1e3 * Hz
         run_presentation(; path, fs, interm_freq, num_samples, realtime = opts["realtime"],
-            fps = opts["fps"], skip_acquisition = opts["no_acq"], skip_receiver = opts["no_rx"])
+            fps = opts["fps"], skip_acquisition = opts["no_acq"], skip_receiver = opts["no_rx"],
+            eager_receiver = opts["eager_rx"])
     end
 end
 

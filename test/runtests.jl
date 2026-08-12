@@ -97,6 +97,33 @@ end
     @test (maximum(p) - sum(p) / length(p)) < 20.0          # dB
 end
 
+@testset "real-time file replay is actually real time" begin
+    # Regression: the paced reader used to reset its deadline to `now` on any `sleep`
+    # overshoot, forgiving the debt every chunk instead of repaying it. That walked
+    # permanently slow — 0.85x with no consumer, 0.63x under the app — and stretched the
+    # whole demo by ~1.6x. Bounds are loose enough for a loaded CI box but would still
+    # have caught that.
+    NS = 10 * SPC
+    period = NS / 1.0e7
+    ch = GP.SignalChannel{Complex{Int16}}(NS, 1)
+    t0 = time()
+    GP._spawn_file_reader!(ch, DATA, FS, NS, true, true, Complex{Int16};
+        stop = () -> time() - t0 > 3.0)
+    n = 0
+    GP._poll_drain(c -> (n += 1), ch)
+    rate = n * period / (time() - t0)
+    @test 0.9 <= rate <= 1.1
+
+    # …and --no-realtime must still run flat out.
+    ch2 = GP.SignalChannel{Complex{Int16}}(NS, 1)
+    t1 = time()
+    GP._spawn_file_reader!(ch2, DATA, FS, NS, false, true, Complex{Int16};
+        stop = () -> time() - t1 > 2.0)
+    n2 = 0
+    GP._poll_drain(c -> (n2 += 1), ch2)
+    @test n2 * period / (time() - t1) > 1.5
+end
+
 @testset "integration: persistent stream + processing (per-slide gating)" begin
     GP._warmup(GPSL1CA(), FS)   # serial compile of all heavy paths before concurrent tasks
     cfg = GP.StreamConfig(; path = DATA, fs = FS, num_samples = 10 * SPC,
@@ -115,19 +142,220 @@ end
     end
 
     # Heavy DSP only runs on its slide → drive the slide to exercise each branch.
-    @lock m.lk (m.slide = GP.SLIDE_SPECTRUM)
+    GP._set_slide!(m, GP.SLIDE_SPECTRUM)
     @test waitfor(() -> (@lock m.lk m.periodogram) !== nothing)
 
-    @lock m.lk (m.slide = GP.SLIDE_ACQ)
+    GP._set_slide!(m, GP.SLIDE_ACQ)
     @test waitfor(() -> (@lock m.lk (m.surface !== nothing && m.selected_prn !== nothing)))
     @test !isempty(m.detected)
+    # Slide 2 quotes the real plan's search size, published by the background tasks.
+    sp = @lock m.lk m.acq_space
+    @test sp !== nothing
+    @test sp.code_phases == SPC && sp.doppler_bins > 1 && sp.prns == 32
+    @test sp.hypotheses ≈ sp.code_phases * sp.doppler_bins * sp.prns
 
-    @lock m.lk (m.slide = GP.SLIDE_TRACK)
+    GP._set_slide!(m, GP.SLIDE_TRACK)
     @test waitfor(() -> (@lock m.lk m.triangle) !== nothing)
 
-    # Receiver is NOT gated — it warms regardless of slide (so PVT is immediate).
-    @test waitfor(() -> (@lock m.lk m.gui) !== nothing; n = 200)
+    # The receiver is started lazily, by entering the decoding slide — not before.
+    @test !(:receiver in (@lock m.lk copy(m.started)))
+    @test (@lock m.lk m.gui) === nothing
+    GP._set_slide!(m, GP.SLIDE_DECODE)
+    @test :receiver in (@lock m.lk copy(m.started))
+    ntasks = @lock m.lk length(m.tasks)
+    # Revisiting the slide must not start a second receiver (and a second file reader).
+    GP._set_slide!(m, GP.SLIDE_TRACK)
+    GP._set_slide!(m, GP.SLIDE_DECODE)
+    @test (@lock m.lk length(m.tasks)) == ntasks
+
+    @test waitfor(() -> (@lock m.lk m.gui) !== nothing; n = 300)
+    # The decoding slide's payload carries live decoder state, not just CN0/PVT.
+    gui = @lock m.lk m.gui
+    @test gui isa GP.NavSnapshot
+    if !isempty(gui.sat_data)
+        sd = first(gui.sat_data)
+        @test hasproperty(sd, :raw) && hasproperty(sd, :complete)
+        @test sd.bits_in_subframe >= -1
+    end
     m.quit = true
+end
+
+@testset "eager receiver start (rehearsal fallback)" begin
+    m = GP.PresentationModel(; fs = FS, eager_rx = true)
+    m.hub = GP.start_stream(GP.StreamConfig(; path = DATA, fs = FS, num_samples = 10 * SPC,
+        realtime = true, loop = true))
+    GP.start_processing!(m)
+    @test :receiver in (@lock m.lk copy(m.started))
+    # …and entering the decoding slide later must not start a second one.
+    n = @lock m.lk length(m.tasks)
+    GP._set_slide!(m, GP.SLIDE_DECODE)
+    @test (@lock m.lk length(m.tasks)) == n
+    m.quit = true
+end
+
+@testset "QR renders back to the exact module matrix" begin
+    # The encoder is QRCoders' problem; the half-block packing is ours, and a QR that is
+    # off by one row is unscannable. Draw it, read the glyphs back, rebuild the matrix.
+    m = GP.qr_matrix(GP.GNSSRECEIVER_URL)
+    w, h = GP.qr_size(m)
+    @test size(m, 1) == size(m, 2)          # square, quiet zone included
+    @test h == cld(size(m, 1), 2)
+    rect = Tachikoma.Rect(1, 1, w + 4, h + 4)
+    buf = Tachikoma.Buffer(rect)
+    GP.draw_qr!(buf, 2, 2, m; max_x = Tachikoma.right(rect), max_y = Tachikoma.bottom(rect))
+
+    # `buffer_to_text` trims blank cells, so read the cells themselves.
+    cell(x, y) = buf.content[(y-rect.y)*rect.width+(x-rect.x)+1]
+
+    back = falses(size(m)...)
+    for (row, r) in enumerate(1:2:size(m, 1)), col in 1:size(m, 2)
+        ch = cell(1 + col, 1 + row).char
+        top, bot = ch == '█' ? (true, true) : ch == '▀' ? (true, false) :
+                   ch == '▄' ? (false, true) : (false, false)
+        back[r, col] = top
+        r + 1 <= size(m, 1) && (back[r+1, col] = bot)
+    end
+    @test back == m                          # every module survived the packing
+
+    # Dark modules must be drawn dark-on-light: an inverted QR defeats many scanners,
+    # and the quiet zone has to be painted white rather than left transparent.
+    @test GP.QR_DARK.fg == Tachikoma.ColorRGB(0x00, 0x00, 0x00)
+    @test GP.QR_DARK.bg == Tachikoma.ColorRGB(0xff, 0xff, 0xff)
+    @test all(cell(1 + c, 2).style.bg == Tachikoma.ColorRGB(0xff, 0xff, 0xff)
+              for c in 1:size(m, 2))         # top row is quiet zone: white, not unpainted
+end
+
+@testset "slide 2 replica search is presenter-driven" begin
+    m = GP.PresentationModel(; fs = FS)
+    GP._set_slide!(m, GP.SLIDE_EXPLAIN)
+    # Starts parked and misaligned — nothing moves until the presenter asks.
+    @test GP._chase_phase!(m) == (GP.CHASE_START_CHIPS, :waiting)
+    @test GP._chase_phase!(m) == (GP.CHASE_START_CHIPS, :waiting)
+
+    GP.update!(m, Tachikoma.KeyEvent(' '))
+    off, st = GP._chase_phase!(m)
+    @test st == :sliding && 0 < off <= GP.CHASE_START_CHIPS
+
+    # Once the search has run its course it locks at zero and stays there.
+    @lock m.lk (m.chase_t0 = time() - GP.CHASE_DURATION - 1)
+    @test GP._chase_phase!(m) == (0.0, :locked)
+    @test GP._chase_phase!(m) == (0.0, :locked)
+
+    GP.update!(m, Tachikoma.KeyEvent('r'))     # re-arm to replay the beat
+    @test GP._chase_phase!(m) == (GP.CHASE_START_CHIPS, :waiting)
+end
+
+@testset "decoding slide survives ephemeris validation" begin
+    # Regression: the grid read `raw_data` only. `GNSSDecoder.confirm_data` promotes raw
+    # into `data` and blanks raw, so every value vanished the moment the ephemeris
+    # validated — while `complete` and the time-of-week stayed on screen. Looked like a
+    # revisit bug; was really "whatever happens after ~40 s".
+    D = GP.GNSSDecoder.GPSL1CAData
+    blank = D()
+    full = D(; trans_week = 947, sqrt_A = 5153.6, TOW = 64800)
+
+    @test GP._eph_val((raw = blank, data = full), :trans_week) == 947     # validated: kept
+    @test GP._eph_val((raw = blank, data = full), :sqrt_A) == 5153.6
+    @test GP._eph_val((raw = full, data = blank), :trans_week) == 947     # provisional: shown
+    @test GP._eph_val((raw = blank, data = blank), :trans_week) === nothing
+    # A validated value must win over a stale provisional one.
+    @test GP._eph_val((raw = D(; trans_week = 1), data = full), :trans_week) == 947
+end
+
+@testset "subframe indicator tracks what is on the air" begin
+    # `_eph_val`/`_eph_get` go through `hasproperty`, so NamedTuples stand in for decoder
+    # data. Values are never held back — this indicator is what carries progress during
+    # the six seconds a subframe takes to arrive.
+    G = GP.EPHEMERIS_GROUPS
+    fieldsyms(g) = (first(f) for f in last(g))
+    vals(syms) = (; (s => 1.0 for s in syms)...)
+
+    # Nothing decoded, no sync yet.
+    st, cur = GP._subframe_states((raw = (;), data = (;)))
+    @test cur === nothing
+    @test all(==(:pending), st)
+    @test length(st) == GP.NUM_SUBFRAMES == 5
+
+    # Subframe 1 complete, currently receiving 2.
+    sd = (raw = merge(vals(fieldsyms(G[1])), (last_subframe_id = 2,)), data = (;))
+    st, cur = GP._subframe_states(sd)
+    @test cur == 2
+    @test st[1] == :done && st[2] == :receiving && st[3] == :pending
+
+    # Sitting through subframe 4: almanac, nothing we need — this is why a fix takes ~30 s
+    # rather than ~18, and the indicator has to say so instead of looking stalled.
+    st, cur = GP._subframe_states((raw = (last_subframe_id = 4,), data = (;)))
+    @test cur == 4 && st[4] == :receiving
+    @test GP.SUBFRAME_NAMES[4] == "almanac"
+
+    # 4 and 5 can never be :done — we do not collect their fields.
+    everything = vals(GP.EPHEMERIS_FIELDS)
+    st, _ = GP._subframe_states((raw = merge(everything, (last_subframe_id = 1,)), data = (;)))
+    @test st[1] == st[2] == st[3] == :done
+    @test st[4] == st[5] == :pending
+
+    # A validated ephemeris (raw wiped by confirm_data) must still read as done.
+    st, _ = GP._subframe_states((raw = (;), data = everything))
+    @test st[1] == st[2] == st[3] == :done
+end
+
+@testset "decode status never contradicts the grid" begin
+    # Regression: `last_subframe_id` also lives in raw_data, so after validation (or once
+    # the recording runs out at 61.4 s) it goes back to `nothing` while the grid is full.
+    # The caption was derived from it alone and announced "no subframe sync yet" directly
+    # underneath a completely decoded ephemeris.
+    vals(syms) = (; (s => 1.0 for s in syms)...)
+    everything = vals(GP.EPHEMERIS_FIELDS)
+    fieldsyms(g) = (first(f) for f in last(g))
+
+    # The reported case: fully decoded, raw wiped, no current subframe.
+    @test GP._decode_status((raw = (;), data = everything))[1] == :complete
+    # Same, with the recording still running and raw refilling.
+    @test GP._decode_status((raw = (last_subframe_id = 2,), data = everything))[1] == :complete
+
+    # Mid-decode states still report what is on the air.
+    sf1 = vals(fieldsyms(GP.EPHEMERIS_GROUPS[1]))
+    k, n = GP._decode_status((raw = merge(sf1, (last_subframe_id = 2,)), data = (;)))
+    @test (k, n) == (:receiving, 2)
+    k, n = GP._decode_status((raw = merge(sf1, (last_subframe_id = 4,)), data = (;)))
+    @test (k, n) == (:almanac, 4)
+
+    # Decoded something, but no current subframe id: we have synced before, so saying
+    # "no sync yet" would be false.
+    @test GP._decode_status((raw = sf1, data = (;)))[1] == :between
+
+    # Genuinely nothing yet is the only case that may claim no sync.
+    @test GP._decode_status((raw = (;), data = (;)))[1] == :nosync
+
+    # "checking" (decoded but not yet validated) needs ALL THREE subframes. Testing only
+    # 1 and 3 claimed "checking" while 2 was missing — i.e. while the satellite was
+    # plainly still transmitting it.
+    sf13 = merge(vals(fieldsyms(GP.EPHEMERIS_GROUPS[1])), vals(fieldsyms(GP.EPHEMERIS_GROUPS[3])))
+    @test !all(g -> GP._group_done((raw = sf13, data = (;)), g), GP.EPHEMERIS_GROUPS)
+    @test all(g -> GP._group_done((raw = everything, data = (;)), g), GP.EPHEMERIS_GROUPS)
+end
+
+@testset "no top-level name is defined in two src files" begin
+    # Every `src/*.jl` is `include`d into the single `GNSSPresentation` module, so a
+    # duplicate top-level name silently redefines the other one. A `const SPINNER` on the
+    # decoding slide shadowed the acquisition slide's 10-frame braille spinner with a
+    # 4-tuple, and the acquisition slide then threw `BoundsError: NTuple{4,Char} at
+    # index [5]` — at render time, on a slide the author was not editing.
+    srcdir = joinpath(@__DIR__, "..", "src")
+    owners = Dict{String,Vector{String}}()
+    for file in filter(f -> endswith(f, ".jl"), readdir(srcdir))
+        for line in eachline(joinpath(srcdir, file))
+            mc = match(r"^const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=", line)
+            mf = match(r"^function\s+([A-Za-z_][A-Za-z0-9_!]*)\s*\(", line)
+            name = mc !== nothing ? mc.captures[1] : mf !== nothing ? mf.captures[1] : nothing
+            name === nothing && continue
+            push!(get!(owners, name, String[]), file)
+        end
+    end
+    dupes = Dict(n => unique(fs) for (n, fs) in owners if length(unique(fs)) > 1)
+    # Methods of one generic function may legitimately be spread across files; constants
+    # and single-file helpers may not. Report whatever we find so the message is useful.
+    @test isempty(dupes) || (@info "duplicate top-level names" dupes; false)
 end
 
 @testset "all slides render headlessly" begin
