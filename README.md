@@ -9,9 +9,9 @@ slide visualizes one stage of the receiver pipeline, live, from the same warm st
 samples → spectrum → acquisition → tracking → decoding → PVT
 ```
 
-The narrative the slides are built to tell — *how do you receive something quieter than
-the noise it arrives in?* — along with why each stage exists and the timing plan, is
-written down in **[STORY.md](STORY.md)**.
+The narrative the slides are built to tell — *how do you receive a signal quieter than
+the environmental noise around it?* — along with why each stage exists and the timing
+plan, is written down in **[STORY.md](STORY.md)**.
 
 ## Slides
 

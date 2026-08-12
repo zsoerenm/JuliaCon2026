@@ -1,4 +1,4 @@
-# Slide 0 — the frame: the signal is quieter than the noise it arrives in, and the
+# Slide 0 — the frame: the signal is quieter than the environmental noise around it, and the
 # receiver is established as knowing nothing at all, so both the detection and the
 # position at the end have to be earned. This slide only states the problem; the trick
 # that solves it is deliberately withheld until slide 2.
@@ -11,7 +11,7 @@
 const WHISPER = (
     ("20 200 km", "where it is sent from.", "Straight up — and moving at 3.9 km/s."),
     ("10⁻¹⁶ W", "what reaches the antenna.", "About a tenth of a femtowatt. Yes, really."),
-    ("50× weaker", "than the noise around it.", "You cannot see it. It is quieter than the silence."),
+    ("50× weaker", "than environmental noise.", "You cannot see it. There is nothing to point at."),
 )
 
 # Encoded once, at precompile time, and baked into the cache — the matrix never changes.
@@ -41,20 +41,20 @@ function render_intro(m::PresentationModel, f::Frame, area::Rect, s)
         textmax = qrx - 3
     end
     set_string!(buf, x, y, "Real-Time GNSS Positioning with JuliaGNSS",
-        tstyle(:title, bold = true); max_x = right(content)); y += 1
+        tstyle(:title, bold = true); max_x = textmax); y += 1
     set_string!(buf, x, y, "From SDR Signals to Your Location",
-        tstyle(:secondary); max_x = right(content)); y += 2
-    set_string!(buf, x, y, "Sören Schönbrod  ·  JuliaGNSS", tstyle(:text); max_x = right(content)); y += 2
+        tstyle(:secondary); max_x = textmax); y += 2
+    set_string!(buf, x, y, "Sören Schönbrod  ·  JuliaGNSS", tstyle(:text); max_x = textmax); y += 2
 
     # What the receiver is given — i.e. almost nothing.
     set_string!(buf, x, y, "This receiver is handed a stream of Int16 numbers and a sample rate.",
-        tstyle(:text); max_x = right(content)); y += 1
+        tstyle(:text); max_x = textmax); y += 1
     set_string!(buf, x, y, "Not the time. Not the place. No almanac. Nothing else.",
-        tstyle(:text_dim); max_x = right(content)); y += 2
+        tstyle(:text_dim); max_x = textmax); y += 2
 
     # The problem, stated in three numbers. The solution is withheld until slide 2.
     set_string!(buf, x, y, "And the signal it is looking for is one it cannot possibly see:",
-        tstyle(:text); max_x = right(content))
+        tstyle(:text); max_x = textmax)
     y += 1
     # Three fixed columns. `rpad` pads but never truncates, so each column also clips at
     # the next column's start — otherwise one over-long string silently runs into its
@@ -63,7 +63,7 @@ function render_intro(m::PresentationModel, f::Frame, area::Rect, s)
         y > bottom(content) - 3 && break
         set_string!(buf, x + 2, y, rpad(label, 12), tstyle(:primary, bold = true); max_x = x + 14)
         set_string!(buf, x + 15, y, rpad(what, 27), tstyle(:text); max_x = x + 42)
-        set_string!(buf, x + 43, y, why, tstyle(:text_dim); max_x = right(content))
+        set_string!(buf, x + 43, y, why, tstyle(:text_dim); max_x = textmax)
         y += 1
     end
     y += 1
@@ -73,19 +73,19 @@ function render_intro(m::PresentationModel, f::Frame, area::Rect, s)
     dots = ("   ", ".  ", ".. ", "...")[mod(m.tick ÷ 8, 4)+1]
     if streaming
         set_string!(buf, x, y, "● streaming live samples$(dots)",
-            tstyle(:success, bold = true); max_x = right(content))
+            tstyle(:success, bold = true); max_x = textmax)
         set_string!(buf, x, y + 1, "$(s.chunk_count) chunks received — the receiver itself does not start until we reach Decoding",
-            tstyle(:text_dim); max_x = right(content))
+            tstyle(:text_dim); max_x = textmax)
     else
         set_string!(buf, x, y, "○ waiting for the sample stream$(dots)",
-            tstyle(:warning); max_x = right(content))
+            tstyle(:warning); max_x = textmax)
     end
     y += 3
     y > bottom(content) && return
     set_string!(buf, x, y, "By the end: ten of them dug out of that noise, a position, and the time to",
-        tstyle(:secondary, bold = true); max_x = right(content)); y += 1
+        tstyle(:secondary, bold = true); max_x = textmax); y += 1
     y > bottom(content) && return
     set_string!(buf, x, y, "within nanoseconds. Earned on stage.",
-        tstyle(:secondary, bold = true); max_x = right(content))
+        tstyle(:secondary, bold = true); max_x = textmax)
     return
 end

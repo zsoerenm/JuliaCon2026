@@ -7,11 +7,11 @@ Abstract: <https://pretalx.com/juliacon-2026/talk/Z38XCK/>
 This file is the script-level companion to the code. The slides implement it; this
 explains *why* each slide exists and what it must leave the audience wanting.
 
-## The frame: a whisper quieter than the silence
+## The frame: a whisper quieter than the environmental noise
 
 The talk is a detection story. One sentence carries it, and it can be said from memory:
 
-> **How do you receive something that is quieter than the noise it arrives in?
+> **How do you receive a signal that is quieter than the environmental noise around it?
 > You already know what it is going to say.**
 
 Everything else is that sentence, in order. The problem is stated in three numbers on the
@@ -96,7 +96,7 @@ tour and a story: each stage exists because the previous stage left something br
 | # | Slide | Beat | Leaves you with |
 |---|-------|------|-----------------|
 | 0 | Title | 10⁻¹⁶ W, 50× under its own noise; the receiver knows nothing | You cannot see it — so how? |
-| 1 | Spectrum | **The cold open.** "Here is the signal." Flat line. Nothing | How do you receive what is quieter than silence? |
+| 1 | Spectrum | **The cold open.** "Here is the signal." Flat line. Nothing | How do you receive what is quieter than the environmental noise? |
 | 2 | The trick | Because you know what it says. Align the known code → −18 dB becomes +15 dB | Which satellite? What code phase? What Doppler? |
 | 3 | Acquisition | The 2D search, live, and the peak erupting from a flat plane | Found them — but they move at 3.9 km/s and the peak slides away |
 | 4 | Tracking | Early/Prompt/Late holds the whisper; delay now measurable to nanoseconds | We can hear it. What is it *saying*? |

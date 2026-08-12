@@ -41,7 +41,7 @@ function render_spectrum(m::PresentationModel, f::Frame, area::Rect, s)
         "Ten satellites are in this picture. Every one of them is ~18 dB under that noise floor.",
         tstyle(:text_dim); max_x = right(noterow))
     set_string!(buf, noterow.x + 2, noterow.y + 1,
-        "So: how do you receive something that is quieter than the silence?",
+        "So: how do you receive a signal that is quieter than the environmental noise around it?",
         tstyle(:accent, bold = true); max_x = right(noterow))
     return
 end

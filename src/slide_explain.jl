@@ -1,5 +1,5 @@
 # Slide 2 — the answer to the question slide 1 poses: how do you receive something
-# quieter than the noise it arrives in? Because you already know what it is going to say.
+# quieter than the environmental noise around it? Because you already know what it says.
 #
 # The navigation message and the PRN code are two layers four orders of magnitude apart
 # in time, and a local replica has to be aligned to the incoming signal in *two* unknown
