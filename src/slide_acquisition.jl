@@ -53,7 +53,7 @@ function render_acquisition(m::PresentationModel, f::Frame, area::Rect, s)
             end
         end
         set_string!(buf, lc.x + 1, bottom(lc),
-            "PRN 1……………………………………32   CN0 $(round(Int,CN0_LO))–$(round(Int,CN0_HI)) dBHz",
+            "PRN 1……………………………………32   CN0 $(round(Int,CN0_LO))–$(round(Int,CN0_HI)) dBHz — the whisper, measured",
             tstyle(:text_dim); max_x = right(lc))
     end
 
@@ -72,7 +72,7 @@ function render_acquisition(m::PresentationModel, f::Frame, area::Rect, s)
         surfarea = Rect(rc.x, rc.y, rc.width, rc.height - 1)
         draw_acq_surface!(buf, surfarea, s.surface)
         set_string!(buf, rc.x + 1, bottom(rc),
-            "power over Doppler × code-phase — peak = the satellite",
+            "power over Doppler × code-phase — flat everywhere but one spike: a satellite, pulled out of the noise",
             tstyle(:text_dim); max_x = right(rc))
     end
     return

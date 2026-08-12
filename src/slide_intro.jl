@@ -1,13 +1,17 @@
-# Slide 0 — the frame. Three clocks set the pace of the whole talk, and the receiver is
-# established as knowing nothing at all, so the position at the end has to be earned.
+# Slide 0 — the frame: the signal is quieter than the noise it arrives in, and the
+# receiver is established as knowing nothing at all, so both the detection and the
+# position at the end have to be earned. This slide only states the problem; the trick
+# that solves it is deliberately withheld until slide 2.
 # The pipeline diagram lives in the persistent header now (`_render_pipeline!`), so this
 # slide spends its space on the story instead of repeating it.
 
-# (label, value, what it means). The antagonists, in the order they bite.
-const CLOCKS = (
-    ("50 bit/s", "what the satellites send.", "Nothing can make it faster — we wait."),
-    ("10 MSPS", "what the antenna delivers.", "Fall behind once and it is over."),
-    ("12 minutes", "what I have.", "All three have to fit in this talk."),
+# (label, what it is, why it hurts). The whisper, in the order the audience meets it.
+# All three are derivable: −158.5 dBW received (IS-GPS-200) against kTB ≈ −141 dBW of
+# thermal noise in the 2 MHz main lobe → −17.5 dB, i.e. ~50× more noise than signal.
+const WHISPER = (
+    ("20 200 km", "where it is sent from.", "Straight up — and moving at 3.9 km/s."),
+    ("10⁻¹⁶ W", "what reaches the antenna.", "About a tenth of a femtowatt. Yes, really."),
+    ("50× weaker", "than the noise around it.", "You cannot see it. It is quieter than the silence."),
 )
 
 # Encoded once, at precompile time, and baked into the cache — the matrix never changes.
@@ -48,13 +52,17 @@ function render_intro(m::PresentationModel, f::Frame, area::Rect, s)
     set_string!(buf, x, y, "Not the time. Not the place. No almanac. Nothing else.",
         tstyle(:text_dim); max_x = right(content)); y += 2
 
-    # The three clocks.
-    set_string!(buf, x, y, "Three clocks decide how this goes:", tstyle(:text); max_x = right(content))
+    # The problem, stated in three numbers. The solution is withheld until slide 2.
+    set_string!(buf, x, y, "And the signal it is looking for is one it cannot possibly see:",
+        tstyle(:text); max_x = right(content))
     y += 1
-    for (label, what, why) in CLOCKS
+    # Three fixed columns. `rpad` pads but never truncates, so each column also clips at
+    # the next column's start — otherwise one over-long string silently runs into its
+    # neighbour and the row reads as garbage.
+    for (label, what, why) in WHISPER
         y > bottom(content) - 3 && break
-        set_string!(buf, x + 2, y, rpad(label, 12), tstyle(:primary, bold = true); max_x = right(content))
-        set_string!(buf, x + 15, y, rpad(what, 27), tstyle(:text); max_x = right(content))
+        set_string!(buf, x + 2, y, rpad(label, 12), tstyle(:primary, bold = true); max_x = x + 14)
+        set_string!(buf, x + 15, y, rpad(what, 27), tstyle(:text); max_x = x + 42)
         set_string!(buf, x + 43, y, why, tstyle(:text_dim); max_x = right(content))
         y += 1
     end
@@ -74,7 +82,10 @@ function render_intro(m::PresentationModel, f::Frame, area::Rect, s)
     end
     y += 3
     y > bottom(content) && return
-    set_string!(buf, x, y, "By the end: a position, and the time to within nanoseconds. Earned on stage.",
+    set_string!(buf, x, y, "By the end: ten of them dug out of that noise, a position, and the time to",
+        tstyle(:secondary, bold = true); max_x = right(content)); y += 1
+    y > bottom(content) && return
+    set_string!(buf, x, y, "within nanoseconds. Earned on stage.",
         tstyle(:secondary, bold = true); max_x = right(content))
     return
 end

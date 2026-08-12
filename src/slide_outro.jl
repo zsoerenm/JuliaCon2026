@@ -31,10 +31,10 @@ function render_outro(m::PresentationModel, f::Frame, area::Rect, s)
         area, buf)
     x = content.x + 2
     y = content.y + 1
-    # Close the frame the title slide opened.
-    set_string!(buf, x, y, "We started with Int16 samples and a sample rate.",
+    # Close the frame the title slide opened: a flat line, and nothing visible in it.
+    set_string!(buf, x, y, "We started with a flat noise floor — and a signal 50× weaker than the noise hiding it.",
         tstyle(:text_dim); max_x = right(content)); y += 1
-    set_string!(buf, x, y, "We ended with a position on a map — and the time to within nanoseconds.",
+    set_string!(buf, x, y, "We ended with ten satellites decoded, a position on a map, and the time to nanoseconds.",
         tstyle(:secondary, bold = true); max_x = right(content)); y += 2
     set_string!(buf, x, y, "Composable, pure-Julia packages — stable and production ready:",
         tstyle(:text); max_x = right(content)); y += 2

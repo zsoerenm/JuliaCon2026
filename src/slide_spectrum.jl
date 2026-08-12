@@ -1,6 +1,10 @@
 # Slide 1 — live power spectrum (periodogram) of the incoming samples. The GPS signals
-# sit BELOW the noise floor, so this looks essentially flat: the motivation for
-# correlation-based acquisition on the next slide.
+# sit BELOW the noise floor, so this looks essentially flat.
+#
+# This is the talk's cold open, and the flatness IS the content: "I promised you a GPS
+# receiver — here is the signal, and there is no signal." So the caption states the fact
+# and then poses the question the rest of the talk answers, rather than explaining it
+# away. Two rows, because the question has to read from the back of the room.
 
 function render_spectrum(m::PresentationModel, f::Frame, area::Rect, s)
     buf = f.buffer
@@ -26,15 +30,18 @@ function render_spectrum(m::PresentationModel, f::Frame, area::Rect, s)
     ylo = isfinite(s.pg_ymin) ? s.pg_ymin : minimum(ys)
     yhi = isfinite(s.pg_ymax) ? s.pg_ymax : maximum(ys)
     pad = max(1.0, (yhi - ylo) * 0.05)
-    # Reserve a row for the caption so it doesn't overwrite the chart's x-axis labels.
-    rows = split_layout(Layout(Vertical, [Fill(), Fixed(1)]), area)
+    # Reserve two rows for the caption so it doesn't overwrite the chart's x-axis labels.
+    rows = split_layout(Layout(Vertical, [Fill(), Fixed(2)]), area)
     chartarea, noterow = rows[1], rows[2]
     chart = Chart([DataSeries(data; label = "PSD [dB]", style = tstyle(:primary))];
         block = block, x_label = "Frequency [MHz]", y_label = "",
         y_bounds = (ylo - pad, yhi + pad), show_legend = false)
     render(chart, chartarea, buf)
     set_string!(buf, noterow.x + 2, noterow.y,
-        "Flat noise floor — the GPS signals are ~20 dB below it, buried in noise.",
+        "Ten satellites are in this picture. Every one of them is ~18 dB under that noise floor.",
         tstyle(:text_dim); max_x = right(noterow))
+    set_string!(buf, noterow.x + 2, noterow.y + 1,
+        "So: how do you receive something that is quieter than the silence?",
+        tstyle(:accent, bold = true); max_x = right(noterow))
     return
 end
