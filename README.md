@@ -19,7 +19,7 @@ plan, is written down in **[STORY.md](STORY.md)**.
 |---|-------|----------------------|
 | 0 | **Title** | The problem in three numbers (20 200 km · 10⁻¹⁶ W · 50× weaker than its own noise), a "● streaming" heartbeat, and a **QR code** to GNSSReceiver.jl |
 | 1 | **Spectrum** | Live periodogram — a flat noise floor. The cold open: *here is the signal, and there is no signal* |
-| 2 | **The trick** | Nav bits × PRN chips at their real (very different) time scales, a replica you **slide into alignment on a keypress** (it locks green, and −18 dB becomes +15 dB), and the true size of the code-phase × Doppler search |
+| 2 | **The trick** | The PRN code we already know, a replica you **slide into alignment on a keypress** (it locks green, and −18 dB becomes +15 dB), and the true size of the code-phase × Doppler search |
 | 3 | **Acquisition** | 32-PRN search bar; pick a detected PRN → its **3D correlation surface**, one spike out of a flat plane |
 | 4 | **Tracking** | The **correlation triangle** from a real many-tap correlator; Early/Prompt/Late colored |
 | 5 | **Decoding** | **Starts the receiver.** A live subframe indicator (`1✓ 2✓ 3· 4◐ 5·`, naming what is on the air), the time-of-week, ephemeris values as they decode, and "N/M validated — need 4 for a fix" |

@@ -34,7 +34,6 @@ is worth knowing cold, because it is the question the audience will ask:
 |---|---|---|
 | C/N₀ | ~45 dBHz | −158.5 dBW against N₀ = −204 dBW/Hz |
 | SNR in the raw 2 MHz band | **−18 dB** | 45 − 10log₁₀(2·10⁶) |
-| chips per bit | **20 460** | 1.023 Mchip/s ÷ 50 bit/s |
 | SNR after 1 ms of correlation | **+15 dB** | 45 − 10log₁₀(10³) |
 
 So one code period of coherent summation swings the signal by 33 dB, from 18 dB below the
@@ -114,20 +113,32 @@ colour. It is the only slide whose job is to make the audience feel stuck.
 
 ### Slide 2 in detail
 
-Nav bits (20 ms) and chips (1 µs) are four orders of magnitude apart and cannot share a
-time axis, so the zoom between them is drawn explicitly rather than faked:
+Three beats, and only three:
 
-1. the navigation message at 50 bit/s — *all the information there is*;
-2. the 1023-chip PRN code at 1.023 Mchip/s, so every bit is smeared over **20 460
-   chips** — and we know all 32 sequences exactly. That is the trick, stated outright;
-3. what actually arrives — code × nav bit, on a carrier of unknown Doppler, 18 dB under
-   the noise — with a local replica *sliding* underneath it. On lock: **"1 ms of adding
-   up turns −18 dB into +15 dB."** That is the talk's central claim, and it fires on a
+1. the 1023-chip PRN code at 1.023 Mchip/s, repeating every 1 ms — **and we know all 32
+   sequences exactly, in advance.** That is the trick, stated outright;
+2. what actually arrives — the code, on a carrier of unknown Doppler, 18 dB under the
+   noise — with a local replica *sliding* underneath it. On lock: **"1 ms of adding up
+   turns −18 dB into +15 dB."** That is the talk's central claim, and it fires on a
    keypress;
-4. the two unknowns, searched together, with the hypothesis count.
+3. the two unknowns, searched together, with the hypothesis count.
 
-The numbers in (4) are computed at render time from the real `plan_acquire`
+The numbers in (3) are computed at render time from the real `plan_acquire`
 configuration, not hardcoded, so the claim is truthful rather than merely plausible.
+
+**The navigation message is deliberately not on this slide.** It used to be beat ①: a
+third waveform layer at 50 bit/s with an explicit `×20 000` zoom down to chip scale, on
+the theory that it planted the data rate early and made the spreading ratio (20 460 chips
+per bit) visible. It was cut, because two time scales four orders of magnitude apart cost
+more minutes to explain than they returned — and, decisively, **the 33 dB argument does
+not depend on them.** The gain comes from correlating one 1 ms code period; the 50 bit/s
+data rate never enters that sum. The layer looked like it was carrying the slide's
+argument while carrying none of it.
+
+50 bit/s is now introduced on the decoding slide, where it actually bites — it is the
+thing that makes us wait ~30 s on stage. It arrives as a new concept rather than an old
+friend, which is the accepted cost; in exchange, this slide is one idea instead of three
+and runs about a minute shorter.
 
 **The code-phase count is `samples_per_code`, not 1023.** At 10 MSPS a 1 ms code period
 is 10 000 samples, so the search tests 10 000 code-phase offsets — one per sample, about
@@ -150,9 +161,6 @@ measurement rather than a diagram.
 The hinge into acquisition: a naive search is ~2·10¹¹ operations, so **nobody does it by
 brute force** — which is exactly why `Acquisition.jl` uses an FFT-based parallel
 code-phase search and the next slide finishes in milliseconds.
-
-The nav-bit layer here also plants the 50 bit/s message four minutes before the decoding
-slide needs it, so it arrives as an old friend rather than a new concept.
 
 ### Slide 5 in detail
 
@@ -216,8 +224,8 @@ Maps onto the abstract's promised 6 / 4 / 2 split.
 |------|---------|
 | 0:00–1:15 | Hook: 10⁻¹⁶ W, 50× under its own noise, and why an open receiver matters |
 | 1:15–2:00 | Spectrum — the cold open. There is nothing there |
-| 2:00–3:30 | The trick (the conceptual core; do not rush it) |
-| 3:30–5:00 | Acquisition — live, the peak out of the flat plane |
+| 2:00–3:00 | The trick (the conceptual core; do not rush it) |
+| 3:00–5:00 | Acquisition — live, the peak out of the flat plane |
 | 5:00–6:15 | Tracking |
 | 6:15–7:15 | Decoding — **receiver starts**; ephemeris fills live (~18 s to first value) |
 | 7:15–8:30 | PVT — the fix lands (~42 s after the decoding slide opened) |

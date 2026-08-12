@@ -1,15 +1,21 @@
 # Slide 2 — the answer to the question slide 1 poses: how do you receive something
 # quieter than the environmental noise around it? Because you already know what it says.
 #
-# The navigation message and the PRN code are two layers four orders of magnitude apart
-# in time, and a local replica has to be aligned to the incoming signal in *two* unknown
-# dimensions at once — code phase and Doppler. Aligning it is what converts the known
-# code into gain: 50 bit/s of information spread over 1.023 Mchip/s, so one code period
-# of coherent summation lifts the signal from ~18 dB below the noise to ~15 dB above it.
-# The correlation triangle deliberately does NOT appear here; it belongs on the tracking
-# slide, where it is a real measurement rather than a diagram.
+# A local replica has to be aligned to the incoming signal in *two* unknown dimensions at
+# once — code phase and Doppler. Aligning it is what converts the known code into gain:
+# one code period of coherent summation lifts the signal from ~18 dB below the noise to
+# ~15 dB above it, and that swing is the talk's central claim.
 #
-# The search-space figures in ④ are derived from the real `AcquisitionPlan` (published by
+# The navigation message is deliberately NOT drawn here. It used to appear as a third
+# waveform layer with a ×20 000 zoom down to chip scale, but the two time scales cost
+# more minutes to explain than they returned: the 33 dB argument rests on correlating one
+# 1 ms code period, not on the 50 bit/s data rate, so the layer was carrying no weight.
+# 50 bit/s is now introduced where it actually bites, on the decoding slide.
+#
+# The correlation triangle deliberately does NOT appear here either; it belongs on the
+# tracking slide, where it is a real measurement rather than a diagram.
+#
+# The search-space figures in ③ are derived from the real `AcquisitionPlan` (published by
 # whichever background task builds one first — see `_publish_acq_space!`), so the
 # "computationally intensive" claim is checkable rather than merely plausible.
 
@@ -35,10 +41,6 @@ function _draw_code_wave!(buf, xlo::Int, xhi::Int, toprow::Int, botrow::Int, cod
     end
     return
 end
-
-# A fixed stand-in for the navigation message. The real bits are decoded on slide 5; here
-# they only have to show the *time scale* — one bit spanning 20 whole code repetitions.
-const NAV_BIT_PATTERN = Int8[1, 1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, -1, -1, 1, -1, 1, -1, -1]
 
 # "41 million", not "41.0 million"; "10 000", not "10000".
 _trim1(x::Real) = (r = round(x; digits = 1); r == round(r) ? string(round(Int, r)) : string(r))
@@ -97,36 +99,20 @@ function render_explain(m::PresentationModel, f::Frame, area::Rect, s)
     cf = get_code_frequency(m.system)
     code = gen_code(L, m.system, 1, cf, cf, 0.0)               # 1 sample/chip → ±1
 
-    # ── ① the navigation message ──────────────────────────────────────────────
-    set_string!(buf, x, y, "① The navigation message — 50 bit/s, one bit lasts 20 ms. All the information there is.",
-        tstyle(:text); max_x = right(c)); y += 1
-    navcpc = 9                        # cells per navigation bit
-    set_string!(buf, x, y, "bits", tstyle(:text_dim); max_x = wx - 1)
-    _draw_code_wave!(buf, wx, right(c), y, y + 1, NAV_BIT_PATTERN, length(NAV_BIT_PATTERN),
-        0.0, navcpc, wx; plus = tstyle(:secondary, bold = true),
-        minus = tstyle(:secondary, dim = true))
-    y += 2
-    # The bracket must span exactly ONE bit, or it silently mis-states the time scale.
-    set_string!(buf, wx, y, "└" * "─"^max(0, navcpc - 2) * "┘", tstyle(:text_dim); max_x = right(c))
-    set_string!(buf, wx + navcpc + 1, y, "one bit = 20 ms = 20 whole repetitions of the code below",
-        tstyle(:text_dim); max_x = right(c)); y += 1
-    set_string!(buf, wx + 12, y, "╲   zoom in ×20 000   ╱", tstyle(:accent); max_x = right(c))
-    y += 2
-
-    # ── ② the code ────────────────────────────────────────────────────────────
-    set_string!(buf, x, y, "② The PRN code — 1023 chips at 1.023 Mchip/s, repeating every 1 ms",
+    # ── ① the code ────────────────────────────────────────────────────────────
+    set_string!(buf, x, y, "① The PRN code — 1023 chips at 1.023 Mchip/s, repeating every 1 ms",
         tstyle(:text); max_x = right(c)); y += 1
     set_string!(buf, x, y, "PRN 1", tstyle(:text_dim); max_x = wx - 1)
     _draw_code_wave!(buf, wx, right(c), y, y + 1, code, L, 0.0, 2, wx)
     y += 2
     # The whole talk turns on this line: the code is known, so it can be correlated for.
-    set_string!(buf, wx, y, "every bit smeared over $(_thousands(20L)) chips — and we know all 32 sequences exactly. That is the trick.",
+    set_string!(buf, wx, y, "each chip ~1 µs — and we know all 32 of these sequences exactly, in advance. That is the trick.",
         tstyle(:text_dim); max_x = right(c))
     y += 2
 
-    # ── ③ the chase: a replica that has to be aligned ─────────────────────────
+    # ── ② the chase: a replica that has to be aligned ─────────────────────────
     y > bottom(c) - 6 && return
-    set_string!(buf, x, y, "③ What arrives = code × nav bit, on a carrier of unknown Doppler — and 18 dB under the noise",
+    set_string!(buf, x, y, "② What arrives — the code, on a carrier of unknown Doppler, 18 dB under the noise",
         tstyle(:text); max_x = right(c)); y += 1
     set_string!(buf, x, y, "received", tstyle(:text_dim); max_x = wx - 1)
     _draw_code_wave!(buf, wx, right(c), y, y + 1, code, L, 0.0, 2, wx)
@@ -152,13 +138,13 @@ function render_explain(m::PresentationModel, f::Frame, area::Rect, s)
     set_string!(buf, wx, y, msg, mstyle; max_x = right(c))
     y += 2
 
-    # ── ④ the size of the search ──────────────────────────────────────────────
+    # ── ③ the size of the search ──────────────────────────────────────────────
     #
     # The code-phase count is `samples_per_code` (10 000 at 10 MSPS), NOT the 1023 chips —
     # the search resolves phase at sample spacing, ~9.8 samples per chip. Spelled out on
     # screen because bare "10 000" next to "1023 chips" two lines above reads as a typo.
     y > bottom(c) - 4 && return
-    set_string!(buf, x, y, "④ Two unknowns, searched together:",
+    set_string!(buf, x, y, "③ Two unknowns, searched together:",
         tstyle(:text); max_x = right(c)); y += 1
     sp = s.acq_space
     if sp === nothing
