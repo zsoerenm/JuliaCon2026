@@ -132,7 +132,7 @@ function render_decode(m::PresentationModel, f::Frame, area::Rect, s)
         "These numbers are the satellite's orbit: with them we know exactly where it was when it sent this bit.",
         tstyle(:text_dim); max_x = right(area))
     set_string!(buf, area.x + 1, rows[2].y + 1,
-        "50 bit/s — the slowest data link you use every day. Nothing can make it faster.",
+        "Everything so far bought 33 dB just so we could read these 50 bits a second. Now we wait for them.",
         tstyle(:secondary); max_x = right(area))
     return
 end

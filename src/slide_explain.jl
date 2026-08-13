@@ -1,13 +1,21 @@
-# Slide 2 — what the signal actually looks like, and why finding it is expensive.
+# Slide 2 — the answer to the question slide 1 poses: how do you receive something
+# quieter than the environmental noise around it? Because you already know what it says.
 #
-# This slide sets up acquisition by posing the problem, not by showing its answer: the
-# navigation message and the PRN code are two layers four orders of magnitude apart in
-# time, and a local replica has to be aligned to the incoming signal in *two* unknown
-# dimensions at once — code phase and Doppler. The correlation triangle deliberately does
-# NOT appear here; it belongs on the tracking slide, where it is a real measurement
-# rather than a diagram.
+# A local replica has to be aligned to the incoming signal in *two* unknown dimensions at
+# once — code phase and Doppler. Aligning it is what converts the known code into gain:
+# one code period of coherent summation lifts the signal from ~18 dB below the noise to
+# ~15 dB above it, and that swing is the talk's central claim.
 #
-# The search-space figures in ④ are derived from the real `AcquisitionPlan` (published by
+# The navigation message is deliberately NOT drawn here. It used to appear as a third
+# waveform layer with a ×20 000 zoom down to chip scale, but the two time scales cost
+# more minutes to explain than they returned: the 33 dB argument rests on correlating one
+# 1 ms code period, not on the 50 bit/s data rate, so the layer was carrying no weight.
+# 50 bit/s is now introduced where it actually bites, on the decoding slide.
+#
+# The correlation triangle deliberately does NOT appear here either; it belongs on the
+# tracking slide, where it is a real measurement rather than a diagram.
+#
+# The search-space figures in ③ are derived from the real `AcquisitionPlan` (published by
 # whichever background task builds one first — see `_publish_acq_space!`), so the
 # "computationally intensive" claim is checkable rather than merely plausible.
 
@@ -33,10 +41,6 @@ function _draw_code_wave!(buf, xlo::Int, xhi::Int, toprow::Int, botrow::Int, cod
     end
     return
 end
-
-# A fixed stand-in for the navigation message. The real bits are decoded on slide 5; here
-# they only have to show the *time scale* — one bit spanning 20 whole code repetitions.
-const NAV_BIT_PATTERN = Int8[1, 1, -1, 1, -1, -1, -1, 1, 1, -1, 1, 1, 1, -1, -1, 1, -1, 1, -1, -1]
 
 # "41 million", not "41.0 million"; "10 000", not "10000".
 _trim1(x::Real) = (r = round(x; digits = 1); r == round(r) ? string(round(Int, r)) : string(r))
@@ -83,7 +87,8 @@ end
 
 function render_explain(m::PresentationModel, f::Frame, area::Rect, s)
     buf = f.buffer
-    c = render(Block(; title = "The signal I have to chase", border_style = tstyle(:border),
+    c = render(Block(; title = "The trick: I already know what it is going to say",
+            border_style = tstyle(:border),
             title_style = tstyle(:accent, bold = true)), area, buf)
     (c.width < 40 || c.height < 14) && return
     x = c.x + 2
@@ -94,35 +99,20 @@ function render_explain(m::PresentationModel, f::Frame, area::Rect, s)
     cf = get_code_frequency(m.system)
     code = gen_code(L, m.system, 1, cf, cf, 0.0)               # 1 sample/chip → ±1
 
-    # ── ① the navigation message ──────────────────────────────────────────────
-    set_string!(buf, x, y, "① The navigation message — 50 bit/s, one bit lasts 20 ms",
-        tstyle(:text); max_x = right(c)); y += 1
-    navcpc = 9                        # cells per navigation bit
-    set_string!(buf, x, y, "bits", tstyle(:text_dim); max_x = wx - 1)
-    _draw_code_wave!(buf, wx, right(c), y, y + 1, NAV_BIT_PATTERN, length(NAV_BIT_PATTERN),
-        0.0, navcpc, wx; plus = tstyle(:secondary, bold = true),
-        minus = tstyle(:secondary, dim = true))
-    y += 2
-    # The bracket must span exactly ONE bit, or it silently mis-states the time scale.
-    set_string!(buf, wx, y, "└" * "─"^max(0, navcpc - 2) * "┘", tstyle(:text_dim); max_x = right(c))
-    set_string!(buf, wx + navcpc + 1, y, "one bit = 20 ms = 20 whole repetitions of the code below",
-        tstyle(:text_dim); max_x = right(c)); y += 1
-    set_string!(buf, wx + 12, y, "╲   zoom in ×20 000   ╱", tstyle(:accent); max_x = right(c))
-    y += 2
-
-    # ── ② the code ────────────────────────────────────────────────────────────
-    set_string!(buf, x, y, "② The PRN code — 1023 chips at 1.023 Mchip/s, repeating every 1 ms",
+    # ── ① the code ────────────────────────────────────────────────────────────
+    set_string!(buf, x, y, "① The PRN code — 1023 chips at 1.023 Mchip/s, repeating every 1 ms",
         tstyle(:text); max_x = right(c)); y += 1
     set_string!(buf, x, y, "PRN 1", tstyle(:text_dim); max_x = wx - 1)
     _draw_code_wave!(buf, wx, right(c), y, y + 1, code, L, 0.0, 2, wx)
     y += 2
-    set_string!(buf, wx, y, "each chip ~1 µs — a unique sequence per satellite, and we know all of them",
+    # The whole talk turns on this line: the code is known, so it can be correlated for.
+    set_string!(buf, wx, y, "each chip ~1 µs — and we know all 32 of these sequences exactly, in advance. That is the trick.",
         tstyle(:text_dim); max_x = right(c))
     y += 2
 
-    # ── ③ the chase: a replica that has to be aligned ─────────────────────────
+    # ── ② the chase: a replica that has to be aligned ─────────────────────────
     y > bottom(c) - 6 && return
-    set_string!(buf, x, y, "③ What arrives = code × nav bit, on a carrier of unknown Doppler",
+    set_string!(buf, x, y, "② What arrives — the code, on a carrier of unknown Doppler, 18 dB under the noise",
         tstyle(:text); max_x = right(c)); y += 1
     set_string!(buf, x, y, "received", tstyle(:text_dim); max_x = wx - 1)
     _draw_code_wave!(buf, wx, right(c), y, y + 1, code, L, 0.0, 2, wx)
@@ -143,26 +133,45 @@ function render_explain(m::PresentationModel, f::Frame, area::Rect, s)
         tstyle(:text_dim)) :
                   state == :sliding ?
                   ("searching… off by $(round(cp; digits = 1)) chips", tstyle(:warning)) :
-                  ("● aligned — the codes match, and the correlation peaks. That is a satellite found.",
+                  ("● aligned — and 1 ms of adding up turns −18 dB into +15 dB. That is a satellite, found.",
         tstyle(:success, bold = true))
     set_string!(buf, wx, y, msg, mstyle; max_x = right(c))
     y += 2
 
-    # ── ④ the size of the search ──────────────────────────────────────────────
-    y > bottom(c) - 3 && return
-    set_string!(buf, x, y, "④ Two unknowns, searched together:",
+    # ── ③ the size of the search ──────────────────────────────────────────────
+    #
+    # The code-phase count is `samples_per_code` (10 000 at 10 MSPS), NOT the 1023 chips —
+    # the search resolves phase at sample spacing, ~9.8 samples per chip. Spelled out on
+    # screen because bare "10 000" next to "1023 chips" two lines above reads as a typo.
+    y > bottom(c) - 4 && return
+    set_string!(buf, x, y, "③ Two unknowns, searched together:",
         tstyle(:text); max_x = right(c)); y += 1
     sp = s.acq_space
     if sp === nothing
         set_string!(buf, x + 3, y, "code phase (where the code starts)  ×  Doppler (how fast it is moving)",
             tstyle(:secondary); max_x = right(c)); y += 1
     else
+        # Where 10 000 comes from, spelled out: fs × one code period. Without the sample
+        # rate on screen the number looks like it should have been 1023.
+        fs_msps = _trim1(Float64(ustrip(Hz, m.fs)) / 1e6)
+        period_ms = _trim1(1000 * L / Float64(ustrip(Hz, cf)))
         set_string!(buf, x + 3, y,
-            "code phase  $(_thousands(sp.code_phases)) offsets   ×   Doppler  $(sp.doppler_bins) bins over ±$(_thousands(round(Int, sp.doppler_span_hz / 2))) Hz   ×   $(sp.prns) satellites",
+            "code phase  $(_thousands(sp.code_phases)) offsets — one per sample: $(fs_msps) MSPS × $(period_ms) ms code period = $(sp.chips) chips at $(round(sp.samples_per_chip; digits = 1)) samples/chip",
             tstyle(:secondary); max_x = right(c)); y += 1
+        y > bottom(c) && return
+        set_string!(buf, x + 3, y,
+            "Doppler  $(sp.doppler_bins) bins, $(round(Int, sp.doppler_spacing_hz)) Hz apart, covering ±$(_thousands(round(Int, sp.doppler_span_hz / 2))) Hz   ×   $(sp.prns) satellites",
+            tstyle(:secondary); max_x = right(c)); y += 1
+        y > bottom(c) && return
         set_string!(buf, x + 3, y,
             "= $(_fmt_count(sp.hypotheses)) alignments to test, each a $(_thousands(sp.code_phases))-sample correlation ≈ $(_fmt_pow10(sp.operations)) operations",
             tstyle(:primary, bold = true); max_x = right(c)); y += 1
+        y > bottom(c) && return
+        # The question this always gets. Integrating longer does NOT add code phases —
+        # the code repeats every 1 ms, so phase is ambiguous modulo one period.
+        set_string!(buf, x + 3, y,
+            "Integrating $(sp.coh_periods) code periods coherently buys $(round(Int, 10log10(sp.coh_periods))) dB more and divides the Doppler spacing by $(sp.coh_periods) — the code-phase axis stays $(_thousands(sp.code_phases)).",
+            tstyle(:text_dim); max_x = right(c)); y += 1
     end
     y > bottom(c) && return
     set_string!(buf, x + 3, y,

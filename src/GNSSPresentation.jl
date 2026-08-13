@@ -171,10 +171,24 @@ end
     _publish_acq_space!(m, plan)
 
 Publish the real size of the acquisition search so slide 2 can quote it instead of
-hardcoding textbook figures: the number of code-phase offsets (one per sample of a code
-period), the Doppler grid the plan actually searches, and the PRN count. `operations` is
-what a *naive* search would cost — every hypothesis is a full code-period correlation —
-which is the number that motivates the FFT-based search on the next slide.
+hardcoding textbook figures: the number of code-phase offsets, the Doppler grid the plan
+actually searches, and the PRN count. `operations` is what a *naive* search would cost —
+every hypothesis is a full code-period correlation — which is the number that motivates
+the FFT-based search on the next slide.
+
+`code_phases` is `samples_per_code`, i.e. **one offset per sample of a single code
+period** — 10 000 at 10 MSPS, not 1023. The 1023 chips are the code's length; the search
+resolves code phase at sample spacing (~9.8 samples per chip here), which is what buys
+sub-chip — and therefore sub-300 m — ranging. `chips` and `samples_per_chip` are
+published alongside so the slide can spell that relationship out rather than leaving
+"10 000" looking like a typo for 1023.
+
+Note that coherent integration does **not** widen the code-phase axis: the code repeats
+every 1 ms, so code phase is ambiguous modulo one code period no matter how long you
+integrate. Integrating `coh_periods` code periods instead narrows the Doppler bin
+spacing by that factor (`spacing = fs / samples_per_code / coh_periods`, see
+`plan_acquire`) and lengthens each correlation — which is why `coh_periods` and
+`doppler_spacing_hz` are published too.
 
 Called by whichever background task builds a plan first; first writer wins.
 """
@@ -185,10 +199,16 @@ function _publish_acq_space!(m::PresentationModel, plan)
         code_phases = plan.samples_per_code
         bins = length(dopplers)
         prns = length(plan.avail_prns)
+        chips = get_code_length(plan.system)
         hypotheses = float(code_phases) * bins * prns
         m.acq_space = (
             code_phases = code_phases,
+            chips = chips,
+            samples_per_chip = code_phases / chips,
+            coh_periods = plan.num_coherently_integrated_code_periods,
             doppler_bins = bins,
+            doppler_spacing_hz = bins > 1 ?
+                                 abs(Float64(ustrip(Hz, dopplers[2] - dopplers[1]))) : 0.0,
             doppler_span_hz = abs(Float64(ustrip(Hz, last(dopplers) - first(dopplers)))),
             prns = prns,
             hypotheses = hypotheses,
@@ -591,11 +611,11 @@ update!(::PresentationModel, ::Event) = nothing
 
 const SLIDE_TITLES = (
     "Real-Time GNSS Positioning with JuliaGNSS",
-    "The raw spectrum: signals below the noise",
-    "The signal I have to chase",
-    "Acquisition: finding the satellites",
-    "Tracking: the correlation triangle",
-    "Decoding: 50 bits per second",
+    "The raw spectrum: there is nothing there",
+    "The trick: I already know what it is going to say",
+    "Acquisition: digging it out of the noise",
+    "Tracking: holding on to it",
+    "Decoding: what the whisper actually says",
     "PVT: position, velocity & time",
     "Why Julia",
     "The JuliaGNSS ecosystem",

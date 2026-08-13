@@ -37,7 +37,8 @@ function render_tracking(m::PresentationModel, f::Frame, area::Rect, s)
 
     _render_code_strip(buf, codearea, m, tr)
 
-    c = render(Block(; title = "Correlation triangle (live)", border_style = tstyle(:border),
+    c = render(Block(; title = "Correlation triangle (live) — holding a whisper from something moving at 3.9 km/s",
+            border_style = tstyle(:border),
             title_style = tstyle(:accent, bold = true)), plotarea, buf)
     gut = 4
     plotx = c.x + gut
